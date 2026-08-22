@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import Home from "./pages/Home";
-import UserInfo from "./pages/userInfo";
+import UserInfo from "./pages/UserInfo";
 import SalersReport from "./pages/SalersReport";
 
 /* ---------------- 404 ---------------- */
