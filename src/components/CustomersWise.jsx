@@ -32,6 +32,117 @@ const monthLabel = (my) => {
 /** full Indian-format amount, no decimals */
 const inr0 = (n) => Math.round(Number(n) || 0).toLocaleString("en-IN");
 
+/** the sheet's conditional-format rules -> a color name */
+const cellColor = (v, baseline) => {
+  if (v == null) return "red";
+  const ratio = v / baseline;
+  if (ratio > 0.8) return "green";
+  if (ratio < 0.5) return "blue";
+  return "yellow";
+};
+
+const COLOR_CLS = {
+  green: "bg-emerald-200/80 font-semibold text-emerald-900",
+  yellow: "bg-yellow-100 font-semibold text-yellow-800",
+  blue: "bg-blue-400/70 font-semibold text-blue-950", // deeper blue — clearly different from green
+  red: "bg-rose-200/80 text-rose-400",
+};
+
+const COLOR_FILTERS = [
+  { key: "green", label: "Green", dot: "bg-emerald-400" },
+  { key: "yellow", label: "Yellow", dot: "bg-yellow-400" },
+  { key: "blue", label: "Blue", dot: "bg-blue-600" },
+  { key: "red", label: "Red", dot: "bg-rose-400" },
+];
+
+/* ---------------- reusable multi-select dropdown (checkboxes) ---------------- */
+
+function MultiSelectDropdown({ label, options, selected, onToggle, onClear, searchable = false, formatOption = (o) => o }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const shown =
+    searchable && search.trim()
+      ? options.filter((o) => o.toLowerCase().includes(search.trim().toLowerCase()))
+      : options;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+          selected.length
+            ? "border-orange-300 bg-orange-50 text-orange-700"
+            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+        }`}
+      >
+        {label}
+        {selected.length > 0 && (
+          <span className="rounded-full bg-orange-500 px-1.5 text-[10px] font-bold text-white">
+            {selected.length}
+          </span>
+        )}
+        <svg
+          className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <>
+          {/* click-away backdrop */}
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-40 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white shadow-xl">
+            {searchable && (
+              <div className="border-b border-slate-100 p-2">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={`Search ${label.toLowerCase()}…`}
+                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 placeholder-slate-400 outline-none focus:border-orange-400"
+                />
+              </div>
+            )}
+            <div className="max-h-56 overflow-y-auto p-1.5 [scrollbar-width:thin]">
+              {shown.length === 0 ? (
+                <p className="px-2 py-4 text-center text-xs text-slate-400">No match.</p>
+              ) : (
+                shown.map((opt) => (
+                  <label
+                    key={opt}
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-slate-700 hover:bg-orange-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(opt)}
+                      onChange={() => onToggle(opt)}
+                      className="h-3.5 w-3.5 shrink-0 accent-orange-500"
+                    />
+                    <span className="truncate" title={formatOption(opt)}>{formatOption(opt)}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            <div className="flex items-center justify-between border-t border-slate-100 px-2.5 py-1.5">
+              <span className="text-[10px] text-slate-400">
+                {selected.length ? `${selected.length} selected` : `All ${label.toLowerCase()}`}
+              </span>
+              <button
+                onClick={onClear}
+                className="text-[11px] font-medium text-orange-600 hover:text-orange-700"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- component ---------------- */
 
 /**
@@ -47,6 +158,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25); // default 25 per page
+
+  /* filters */
+  const [colorFilter, setColorFilter] = useState([]); // [] = all colors
+  const [custSelected, setCustSelected] = useState([]); // [] = all customers
+  const [monthSelected, setMonthSelected] = useState([]); // [] = all month columns
 
   /* month columns present in the data — newest first */
   const monthCols = useMemo(() => {
@@ -89,15 +205,46 @@ export default function CustomersWise({ rows = [], loading = false }) {
       // sale over the last 12 months — guarded like IF(BC=0,1,BC)
       const avg = cnt12 ? lastYear / cnt12 : 0;
       c.baseline = avg === 0 ? 1 : avg;
+      // the customer's color = its LATEST month's cell color
+      c.color = cellColor(monthCols[0] ? c.months[monthCols[0]] : null, c.baseline);
     }
     return [...map.values()].sort((a, b) => b.total - a.total);
-  }, [rows]);
+  }, [rows, monthCols]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter((c) => c.name.toLowerCase().includes(q));
-  }, [customers, query]);
+    return customers.filter((c) => {
+      if (q && !c.name.toLowerCase().includes(q)) return false;
+      if (colorFilter.length && !colorFilter.includes(c.color)) return false;
+      if (custSelected.length && !custSelected.includes(c.name)) return false;
+      return true;
+    });
+  }, [customers, query, colorFilter, custSelected]);
+
+  const toggleColor = (key) =>
+    setColorFilter((cur) =>
+      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
+    );
+
+  const toggleCustomer = (name) =>
+    setCustSelected((cur) =>
+      cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]
+    );
+
+  const toggleMonth = (my) =>
+    setMonthSelected((cur) =>
+      cur.includes(my) ? cur.filter((m) => m !== my) : [...cur, my]
+    );
+
+  const custOptions = useMemo(() => customers.map((c) => c.name), [customers]);
+
+  /* month columns actually shown (Month filter); coloring stays tied to the
+     true latest 3 months of the data, whatever columns are visible */
+  const visibleMonths = useMemo(
+    () => (monthSelected.length ? monthCols.filter((m) => monthSelected.includes(m)) : monthCols),
+    [monthCols, monthSelected]
+  );
+  const recentMonths = useMemo(() => new Set(monthCols.slice(0, 3)), [monthCols]);
 
   /* pagination */
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -106,7 +253,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   useEffect(() => {
     setPage(1);
-  }, [query, pageSize, rows.length]);
+  }, [query, pageSize, rows.length, colorFilter, custSelected, monthSelected]);
 
   const grandTotal = useMemo(
     () => customers.reduce((s, c) => s + c.total, 0),
@@ -160,11 +307,66 @@ export default function CustomersWise({ rows = [], loading = false }) {
           <span className="h-2.5 w-2.5 rounded-sm bg-yellow-100 ring-1 ring-yellow-200" /> 50–80%
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-sm bg-sky-200" /> &lt; 50%
+          <span className="h-2.5 w-2.5 rounded-sm bg-blue-400" /> &lt; 50%
         </span>
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm bg-rose-200" /> no sale
         </span>
+      </div>
+
+      {/* filter row: color-wise + customer multi-select */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+        <span className="text-xs font-medium text-slate-500">Color Wise:</span>
+        {COLOR_FILTERS.map((cf) => {
+          const active = colorFilter.includes(cf.key);
+          return (
+            <button
+              key={cf.key}
+              onClick={() => toggleColor(cf.key)}
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+                active
+                  ? "border-slate-700 bg-slate-800 text-white shadow"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+              }`}
+            >
+              <span className={`h-2 w-2 rounded-full ${cf.dot}`} />
+              {cf.label}
+            </button>
+          );
+        })}
+
+        {/* customer multi-select dropdown */}
+        <MultiSelectDropdown
+          label="Customers"
+          options={custOptions}
+          selected={custSelected}
+          onToggle={toggleCustomer}
+          onClear={() => setCustSelected([])}
+          searchable
+        />
+
+        {/* month multi-select dropdown (chooses which month columns are shown) */}
+        <MultiSelectDropdown
+          label="Month"
+          options={monthCols}
+          selected={monthSelected}
+          onToggle={toggleMonth}
+          onClear={() => setMonthSelected([])}
+          formatOption={monthLabel}
+        />
+
+        {(colorFilter.length > 0 || custSelected.length > 0 || monthSelected.length > 0) && (
+          <button
+            onClick={() => {
+              setColorFilter([]);
+              setCustSelected([]);
+              setMonthSelected([]);
+            }}
+            className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-600 transition-colors hover:bg-orange-100"
+          >
+            Clear filters ✕
+          </button>
+        )}
       </div>
 
       {/* pivot table — customer column frozen, months scroll horizontally */}
@@ -173,12 +375,12 @@ export default function CustomersWise({ rows = [], loading = false }) {
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50">
               {/* frozen customer column */}
-              <th className="sticky left-0 z-20 min-w-[180px] max-w-[220px] border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-600 shadow-[2px_0_4px_rgba(15,23,42,0.06)]">
+              <th className="sticky left-0 z-20 w-[200px] min-w-[200px] max-w-[200px] border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-600 shadow-[2px_0_4px_rgba(15,23,42,0.06)]">
                 <span className="mr-2 font-mono text-slate-400">SL</span>Customer Name
               </th>
 
               {/* month columns — newest first */}
-              {monthCols.map((my) => (
+              {visibleMonths.map((my) => (
                 <th
                   key={my}
                   className="whitespace-nowrap border-r border-slate-100 px-3 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wider text-blue-700"
@@ -202,13 +404,13 @@ export default function CustomersWise({ rows = [], loading = false }) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={1 + monthCols.length + summaryCols.length} className="px-5 py-12 text-center text-slate-400">
+                <td colSpan={1 + visibleMonths.length + summaryCols.length} className="px-5 py-12 text-center text-slate-400">
                   Loading customers…
                 </td>
               </tr>
             ) : paginated.length === 0 ? (
               <tr>
-                <td colSpan={1 + monthCols.length + summaryCols.length} className="px-5 py-12 text-center text-slate-400">
+                <td colSpan={1 + visibleMonths.length + summaryCols.length} className="px-5 py-12 text-center text-slate-400">
                   No customers found{query ? ` for "${query}"` : ""}.
                 </td>
               </tr>
@@ -222,13 +424,15 @@ export default function CustomersWise({ rows = [], loading = false }) {
                   >
                     {/* frozen customer cell */}
                     <td
-                      className="sticky left-0 z-10 min-w-[180px] max-w-[220px] border-r border-slate-200 bg-white px-3 py-2 font-medium text-slate-700 shadow-[2px_0_4px_rgba(15,23,42,0.06)] group-hover:bg-orange-50"
+                      className="sticky left-0 z-10 w-[200px] min-w-[200px] max-w-[200px] border-r border-slate-200 bg-white px-3 py-2 shadow-[2px_0_4px_rgba(15,23,42,0.06)] group-hover:bg-orange-50"
                       title={c.name}
                     >
-                      <span className="mr-2 inline-block w-6 text-right font-mono text-[10px] text-slate-400">
-                        {rank}
-                      </span>
-                      <span className="truncate">{c.name}</span>
+                      <div className="flex items-center gap-1.5 overflow-hidden">
+                        <span className="w-6 shrink-0 text-right font-mono text-[10px] text-slate-400">
+                          {rank}
+                        </span>
+                        <span className="truncate font-medium text-slate-700">{c.name}</span>
+                      </div>
                     </td>
 
                     {/* month cells — the sheet's conditional formatting applies to the
@@ -237,18 +441,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
                           value/baseline < 0.5  -> blue
                           value/baseline < 0.8  -> yellow
                           no sale (empty)       -> red        */}
-                    {monthCols.map((my, mIdx) => {
+                    {visibleMonths.map((my) => {
                       const v = c.months[my];
                       let cls = "text-slate-600";
-                      if (mIdx < 3) {
-                        if (v == null) {
-                          cls = "bg-rose-200/80 text-rose-400";
-                        } else {
-                          const ratio = v / c.baseline;
-                          if (ratio > 0.8) cls = "bg-emerald-200/80 font-semibold text-emerald-900";
-                          else if (ratio < 0.5) cls = "bg-sky-200/80 font-semibold text-sky-900";
-                          else cls = "bg-yellow-100 font-semibold text-yellow-800";
-                        }
+                      if (recentMonths.has(my)) {
+                        cls = COLOR_CLS[cellColor(v, c.baseline)];
                       } else if (v == null) {
                         cls = "text-slate-300";
                       }
