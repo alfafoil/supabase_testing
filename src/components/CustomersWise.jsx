@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 
 /* ---------------- constants / helpers ---------------- */
@@ -28,6 +28,12 @@ const monthLabel = (my) => {
   const [m, y] = my.split("-");
   return `20${y}-${m}`;
 };
+
+/** current Indian financial year (Apr–Mar) of a date, e.g. "2026-2027" */
+const fyOfDate = (d) =>
+  d.getMonth() + 1 >= 4
+    ? `${d.getFullYear()}-${d.getFullYear() + 1}`
+    : `${d.getFullYear() - 1}-${d.getFullYear()}`;
 
 /** full Indian-format amount, no decimals */
 const inr0 = (n) => Math.round(Number(n) || 0).toLocaleString("en-IN");
@@ -67,6 +73,31 @@ const SCOPE_LABELS = {
 };
 const DEFAULT_SCOPE = ["current"];
 const SCOPE_COL = { current: 0, previous: 1, third: 2 };
+
+/* the four trailing-month summary columns — each is the MAXIMUM of any
+   single month's total debit within its range (not a sum), relative to
+   today, EXCLUDING the current (in-progress) month:
+     Last 4 Month : month -1 .. month -5
+     5-8 Month    : month -6 .. month -9
+     9-12 Month   : month -10 .. month -13
+     Last 1 Year  : month -1 .. month -13
+   (the underlying "baseline" used for the latest-3-months color coding is
+   a separate, unaffected average — see statsByName below) */
+const SPECIAL_COL_OPTIONS = ["lastYear", "last4", "m5to8", "m9to12"];
+const SPECIAL_COL_LABELS = {
+  lastYear: "Last 1 Year",
+  last4: "Last 4 Month",
+  m5to8: "5-8 Month",
+  m9to12: "9-12 Month",
+};
+
+const OPERATION_OPTIONS = [
+  { key: "more", label: "More Than" },
+  { key: "less", label: "Less Than" },
+  { key: "between", label: "In Between" },
+];
+
+const LAKH = 100000;
 
 /* ---------------- reusable multi-select dropdown (checkboxes) ---------------- */
 
@@ -164,7 +195,7 @@ function MultiSelectDropdown({ label, options, selected, onToggle, onClear, sear
  * one column per month, newest month first, frozen customer column).
  *
  * Props:
- *  - rows    : array from fetchSalesReport() -> { particulars, debit, month_year, ... }
+ *  - rows    : array from fetchSalesReport() -> { particulars, debit, month_year, salesman_name, fy, ... }
  *  - loading : boolean (optional)
  */
 export default function CustomersWise({ rows = [], loading = false }) {
@@ -175,19 +206,81 @@ export default function CustomersWise({ rows = [], loading = false }) {
   /* filters */
   const [colorFilter, setColorFilter] = useState([]); // [] = all colors
   const [colorScope, setColorScope] = useState(DEFAULT_SCOPE); // which months the color filter checks
+  const [salesmanFilter, setSalesmanFilter] = useState([]); // [] = all salesmen
+  const [fyFilter, setFyFilter] = useState([]); // [] = all financial years
   const [custSelected, setCustSelected] = useState([]); // [] = all customers
   const [monthSelected, setMonthSelected] = useState([]); // [] = all month columns
 
-  /* month columns present in the data — newest first */
-  const monthCols = useMemo(() => {
-    const set = new Set(rows.map((r) => r.month_year).filter(Boolean));
-    return [...set].sort((a, b) => monthSortKey(b) - monthSortKey(a));
+  /* Special Filter — number filter on the 4 trailing-month summary columns.
+     "Apply On" defaults to Last 1 Year; the filter itself only activates
+     once an Operation + value are also chosen. */
+  const [specialOp, setSpecialOp] = useState(""); // "" | "more" | "less" | "between"
+  const [specialCols, setSpecialCols] = useState(["lastYear"]); // subset of SPECIAL_COL_OPTIONS
+  const [specialValue, setSpecialValue] = useState(""); // lakhs, for more/less
+  const [specialFrom, setSpecialFrom] = useState(""); // lakhs, for between
+  const [specialTo, setSpecialTo] = useState(""); // lakhs, for between
+
+  /* default the FY filter to the current financial year, once, as soon as
+     the data actually contains it — mirrors the Sales Report page's default */
+  const didInitFy = useRef(false);
+  useEffect(() => {
+    if (didInitFy.current || !rows.length) return;
+    didInitFy.current = true;
+    const defFy = fyOfDate(new Date());
+    if (rows.some((r) => r.fy === defFy)) setFyFilter([defFy]);
   }, [rows]);
 
-  /* pivot: one row per customer (particulars), one cell per month */
-  const customers = useMemo(() => {
+  /* Salesman / FY option lists — always the FULL universe, unaffected by
+     any currently-selected filter (so the dropdowns never shrink on you) */
+  const salesmanOptions = useMemo(() => {
+    const set = new Set(rows.map((r) => r.salesman_name).filter(Boolean));
+    return [...set].sort();
+  }, [rows]);
+
+  const fyOptions = useMemo(() => {
+    const set = new Set(rows.map((r) => r.fy).filter(Boolean));
+    return [...set].sort();
+  }, [rows]);
+
+  const toggleSalesman = (name) =>
+    setSalesmanFilter((cur) =>
+      cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]
+    );
+
+  const toggleFy = (fy) =>
+    setFyFilter((cur) =>
+      cur.includes(fy) ? cur.filter((f) => f !== fy) : [...cur, fy]
+    );
+
+  /* rows used for the main grid (month columns + pivot cells): Salesman
+     AND FY both narrow this */
+  const gridRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (salesmanFilter.length && !salesmanFilter.includes(r.salesman_name)) return false;
+      if (fyFilter.length && !fyFilter.includes(r.fy)) return false;
+      return true;
+    });
+  }, [rows, salesmanFilter, fyFilter]);
+
+  /* rows used for the Last 1 Year / Last 4 Month / 5-8 / 9-12 summary
+     columns: Salesman narrows these too, but FY never does — those four
+     columns always look at the true, unfiltered trailing months */
+  const statsRows = useMemo(() => {
+    if (!salesmanFilter.length) return rows;
+    return rows.filter((r) => salesmanFilter.includes(r.salesman_name));
+  }, [rows, salesmanFilter]);
+
+  /* month columns present in the (Salesman + FY filtered) data — newest first */
+  const monthCols = useMemo(() => {
+    const set = new Set(gridRows.map((r) => r.month_year).filter(Boolean));
+    return [...set].sort((a, b) => monthSortKey(b) - monthSortKey(a));
+  }, [gridRows]);
+
+  /* pivot: one row per customer (particulars), one cell per month —
+     built from gridRows so Salesman/FY narrow the grid itself */
+  const customersBase = useMemo(() => {
     const map = new Map();
-    for (const r of rows) {
+    for (const r of gridRows) {
       const name = (r.particulars || "Unknown").trim();
       if (!map.has(name)) map.set(name, { name, total: 0, months: {} });
       const c = map.get(name);
@@ -195,33 +288,73 @@ export default function CustomersWise({ rows = [], loading = false }) {
       c.total += amt;
       if (r.month_year) c.months[r.month_year] = (c.months[r.month_year] || 0) + amt;
     }
+    return map;
+  }, [gridRows]);
 
-    /* summary columns, relative to today */
+  /* summary stats (Last 1 Year / Last 4 Month / 5-8 / 9-12 + baseline),
+     always relative to today, from statsRows — deliberately independent
+     of the FY filter (and of which months happen to be on screen) */
+  const statsByName = useMemo(() => {
+    // step 1: per-customer, per-month totals (a customer can have several
+    // rows landing in the same month) — the four summary columns then take
+    // the MAX across the months inside their range, not a sum
+    const monthSums = new Map(); // name -> Map(month_year -> sum)
+    for (const r of statsRows) {
+      const name = (r.particulars || "Unknown").trim();
+      if (!r.month_year) continue;
+      if (!monthSums.has(name)) monthSums.set(name, new Map());
+      const m = monthSums.get(name);
+      m.set(r.month_year, (m.get(r.month_year) || 0) + (Number(r.debit) || 0));
+    }
+
     const nowD = new Date();
     const nowIdx = nowD.getFullYear() * 12 + nowD.getMonth();
-    for (const c of map.values()) {
-      let lastYear = 0, last4 = 0, m5to8 = 0, cnt12 = 0;
-      for (const [my, amt] of Object.entries(c.months)) {
+
+    const map = new Map();
+    for (const [name, monthMap] of monthSums.entries()) {
+      let last4 = 0, m5to8 = 0, m9to12 = 0, lastYear = 0;
+      let baselineSum = 0, baselineCnt = 0; // separate, unaffected average — see below
+
+      for (const [my, sum] of monthMap.entries()) {
         const idx = monthIndex(my);
         if (idx == null) continue;
-        const diff = nowIdx - idx; // 0 = current month
-        if (diff >= 0 && diff < 12) {
-          lastYear += amt;
-          cnt12 += 1;
+        const diff = nowIdx - idx; // 1 = last month, 2 = two months ago, …
+
+        // the four displayed columns — maximum single month within range
+        if (diff >= 1 && diff <= 13) lastYear = Math.max(lastYear, sum);
+        if (diff >= 1 && diff <= 5) last4 = Math.max(last4, sum);
+        if (diff >= 6 && diff <= 9) m5to8 = Math.max(m5to8, sum);
+        if (diff >= 10 && diff <= 13) m9to12 = Math.max(m9to12, sum);
+
+        // baseline for the latest-3-months color coding stays an AVERAGE
+        // over the trailing 12 months — untouched by the max-column change
+        if (diff >= 1 && diff <= 12) {
+          baselineSum += sum;
+          baselineCnt += 1;
         }
-        if (diff >= 0 && diff < 4) last4 += amt;
-        if (diff >= 4 && diff < 8) m5to8 += amt;
       }
-      c.lastYear = lastYear;
-      c.last4 = last4;
-      c.m5to8 = m5to8;
-      // baseline (the sheet's BC column): the customer's average monthly
-      // sale over the last 12 months — guarded like IF(BC=0,1,BC)
-      const avg = cnt12 ? lastYear / cnt12 : 0;
-      c.baseline = avg === 0 ? 1 : avg;
+
+      const avg = baselineCnt ? baselineSum / baselineCnt : 0;
+      map.set(name, { last4, m5to8, m9to12, lastYear, baseline: avg === 0 ? 1 : avg });
     }
-    return [...map.values()].sort((a, b) => b.total - a.total);
-  }, [rows]);
+    return map;
+  }, [statsRows]);
+
+  /* merge grid pivot + stats into the final per-customer rows */
+  const customers = useMemo(() => {
+    const list = [...customersBase.values()].map((c) => {
+      const s = statsByName.get(c.name) || { last4: 0, m5to8: 0, m9to12: 0, lastYear: 0, baseline: 1 };
+      return {
+        ...c,
+        last4: s.last4,
+        m5to8: s.m5to8,
+        m9to12: s.m9to12,
+        lastYear: s.lastYear,
+        baseline: s.baseline,
+      };
+    });
+    return list.sort((a, b) => b.total - a.total);
+  }, [customersBase, statsByName]);
 
   /* the month columns the Color Wise filter checks, from the scope dropdown
      (current -> 1st column, previous -> 2nd, third -> 3rd);
@@ -236,6 +369,29 @@ export default function CustomersWise({ rows = [], loading = false }) {
     return [...set];
   }, [colorScope, monthCols]);
 
+  /* is the Special Filter actually configured enough to apply? */
+  const specialActive =
+    specialOp &&
+    specialCols.length > 0 &&
+    (specialOp === "between"
+      ? specialFrom.trim() !== "" || specialTo.trim() !== ""
+      : specialValue.trim() !== "");
+
+  const passesSpecial = (c) => {
+    if (!specialActive) return true;
+    return specialCols.every((key) => {
+      const v = Number(c[key]) || 0;
+      if (specialOp === "more") return v > Number(specialValue) * LAKH;
+      if (specialOp === "less") return v < Number(specialValue) * LAKH;
+      if (specialOp === "between") {
+        const from = specialFrom.trim() !== "" ? Number(specialFrom) * LAKH : -Infinity;
+        const to = specialTo.trim() !== "" ? Number(specialTo) * LAKH : Infinity;
+        return v >= from && v <= to;
+      }
+      return true;
+    });
+  };
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return customers.filter((c) => {
@@ -249,9 +405,12 @@ export default function CustomersWise({ rows = [], loading = false }) {
         if (!match) return false;
       }
       if (custSelected.length && !custSelected.includes(c.name)) return false;
+      // Special Filter can be combined with Color Wise — both apply together
+      if (!passesSpecial(c)) return false;
       return true;
     });
-  }, [customers, query, colorFilter, custSelected, scopedMonths]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customers, query, colorFilter, custSelected, scopedMonths, specialActive, specialOp, specialCols, specialValue, specialFrom, specialTo]);
 
   const toggleColor = (key) =>
     setColorFilter((cur) =>
@@ -271,6 +430,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
   const toggleMonth = (my) =>
     setMonthSelected((cur) =>
       cur.includes(my) ? cur.filter((m) => m !== my) : [...cur, my]
+    );
+
+  const toggleSpecialCol = (key) =>
+    setSpecialCols((cur) =>
+      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
     );
 
   const custOptions = useMemo(() => customers.map((c) => c.name), [customers]);
@@ -293,7 +457,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   useEffect(() => {
     setPage(1);
-  }, [query, pageSize, rows.length, colorFilter, colorScope, custSelected, monthSelected]);
+  }, [
+    query, pageSize, rows.length, colorFilter, colorScope,
+    salesmanFilter, fyFilter, custSelected, monthSelected,
+    specialOp, specialCols, specialValue, specialFrom, specialTo,
+  ]);
 
   const grandTotal = useMemo(
     () => customers.reduce((s, c) => s + c.total, 0),
@@ -303,8 +471,32 @@ export default function CustomersWise({ rows = [], loading = false }) {
   const summaryCols = [
     { key: "lastYear", label: "Last 1 Year" },
     { key: "last4", label: "Last 4 Month" },
-    { key: "m5to8", label: "5-8 Months" },
+    { key: "m5to8", label: "5-8 Month" },
+    { key: "m9to12", label: "9-12 Month" },
   ];
+
+  const anyFilterActive =
+    colorFilter.length > 0 ||
+    custSelected.length > 0 ||
+    monthSelected.length > 0 ||
+    salesmanFilter.length > 0 ||
+    fyFilter.length > 0 ||
+    specialActive ||
+    !scopeIsDefault;
+
+  const clearAllFilters = () => {
+    setColorFilter([]);
+    setColorScope(DEFAULT_SCOPE);
+    setSalesmanFilter([]);
+    setFyFilter([]);
+    setCustSelected([]);
+    setMonthSelected([]);
+    setSpecialOp("");
+    setSpecialCols([]);
+    setSpecialValue("");
+    setSpecialFrom("");
+    setSpecialTo("");
+  };
 
   return (
     <motion.div
@@ -354,7 +546,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
         </span>
       </div>
 
-      {/* filter row: color-wise + its month scope + customer multi-select */}
+      {/* filter row: color-wise + its month scope + salesman/FY/customer/month */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
         <span className="text-xs font-medium text-slate-500">Color Wise:</span>
         {COLOR_FILTERS.map((cf) => {
@@ -388,6 +580,25 @@ export default function CustomersWise({ rows = [], loading = false }) {
           emptyText="Current month"
         />
 
+        {/* salesman multi-select dropdown */}
+        <MultiSelectDropdown
+          label="Salesman"
+          options={salesmanOptions}
+          selected={salesmanFilter}
+          onToggle={toggleSalesman}
+          onClear={() => setSalesmanFilter([])}
+          searchable
+        />
+
+        {/* FY multi-select dropdown */}
+        <MultiSelectDropdown
+          label="FY"
+          options={fyOptions}
+          selected={fyFilter}
+          onToggle={toggleFy}
+          onClear={() => setFyFilter([])}
+        />
+
         {/* customer multi-select dropdown */}
         <MultiSelectDropdown
           label="Customers"
@@ -408,17 +619,91 @@ export default function CustomersWise({ rows = [], loading = false }) {
           formatOption={monthLabel}
         />
 
-        {(colorFilter.length > 0 || custSelected.length > 0 || monthSelected.length > 0 || !scopeIsDefault) && (
+        {anyFilterActive && (
           <button
-            onClick={() => {
-              setColorFilter([]);
-              setColorScope(DEFAULT_SCOPE);
-              setCustSelected([]);
-              setMonthSelected([]);
-            }}
+            onClick={clearAllFilters}
             className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-600 transition-colors hover:bg-orange-100"
           >
             Clear filters ✕
+          </button>
+        )}
+      </div>
+
+      {/* Special Filter row — numeric filter (in lakhs) on the 4 trailing-month
+          summary columns; combines together with Color Wise, doesn't replace it */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
+        <span className="text-xs font-medium text-slate-500">Special Filter:</span>
+
+        <select
+          value={specialOp}
+          onChange={(e) => setSpecialOp(e.target.value)}
+          className="cursor-pointer rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 outline-none focus:border-orange-400"
+        >
+          <option value="">Operation…</option>
+          {OPERATION_OPTIONS.map((o) => (
+            <option key={o.key} value={o.key}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+
+        {specialOp === "between" ? (
+          <span className="flex items-center gap-1.5">
+            <input
+              type="number"
+              value={specialFrom}
+              onChange={(e) => setSpecialFrom(e.target.value)}
+              placeholder="From"
+              className="w-20 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 placeholder-slate-400 outline-none focus:border-orange-400"
+            />
+            <span className="text-xs text-slate-400">to</span>
+            <input
+              type="number"
+              value={specialTo}
+              onChange={(e) => setSpecialTo(e.target.value)}
+              placeholder="To"
+              className="w-20 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 placeholder-slate-400 outline-none focus:border-orange-400"
+            />
+            <span className="text-[11px] text-slate-400">Lakh</span>
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <input
+              type="number"
+              value={specialValue}
+              onChange={(e) => setSpecialValue(e.target.value)}
+              placeholder="Value"
+              disabled={!specialOp}
+              className="w-24 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 placeholder-slate-400 outline-none focus:border-orange-400 disabled:cursor-not-allowed disabled:bg-slate-100"
+            />
+            <span className="text-[11px] text-slate-400">Lakh</span>
+          </span>
+        )}
+
+        {/* which of the 4 summary columns this operation checks — multiple
+            selectable; ALL selected columns must satisfy the condition */}
+        <MultiSelectDropdown
+          label="Apply On"
+          options={SPECIAL_COL_OPTIONS}
+          selected={specialCols}
+          onToggle={toggleSpecialCol}
+          onClear={() => setSpecialCols([])}
+          formatOption={(k) => SPECIAL_COL_LABELS[k]}
+          emptyText="Choose columns"
+        />
+
+        {(specialOp || specialCols.length > 0 || specialValue || specialFrom || specialTo) && (
+          <button
+            onClick={() => {
+              setSpecialOp("");
+              setSpecialCols([]);
+              setSpecialValue("");
+              setSpecialFrom("");
+              setSpecialTo("");
+            }}
+            className="text-[11px] font-medium text-orange-600 hover:text-orange-700"
+          >
+            Clear
           </button>
         )}
       </div>
