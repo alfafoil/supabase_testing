@@ -55,9 +55,22 @@ const COLOR_FILTERS = [
   { key: "red", label: "Red", dot: "bg-rose-400" },
 ];
 
+/* which month column the Color Wise filter is applied on —
+   each option maps to ONE column: current = 1st (newest) column,
+   previous = 2nd column, third = 3rd column. Selecting several means
+   the color must match in ALL of the selected columns. */
+const SCOPE_OPTIONS = ["current", "previous", "third"];
+const SCOPE_LABELS = {
+  current: "Current Month (1st column)",
+  previous: "Previous Month (2nd column)",
+  third: "3rd Month (3rd column)",
+};
+const DEFAULT_SCOPE = ["current"];
+const SCOPE_COL = { current: 0, previous: 1, third: 2 };
+
 /* ---------------- reusable multi-select dropdown (checkboxes) ---------------- */
 
-function MultiSelectDropdown({ label, options, selected, onToggle, onClear, searchable = false, formatOption = (o) => o }) {
+function MultiSelectDropdown({ label, options, selected, onToggle, onClear, searchable = false, formatOption = (o) => o, emptyText }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -127,7 +140,7 @@ function MultiSelectDropdown({ label, options, selected, onToggle, onClear, sear
             </div>
             <div className="flex items-center justify-between border-t border-slate-100 px-2.5 py-1.5">
               <span className="text-[10px] text-slate-400">
-                {selected.length ? `${selected.length} selected` : `All ${label.toLowerCase()}`}
+                {selected.length ? `${selected.length} selected` : emptyText || `All ${label.toLowerCase()}`}
               </span>
               <button
                 onClick={onClear}
@@ -161,6 +174,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   /* filters */
   const [colorFilter, setColorFilter] = useState([]); // [] = all colors
+  const [colorScope, setColorScope] = useState(DEFAULT_SCOPE); // which months the color filter checks
   const [custSelected, setCustSelected] = useState([]); // [] = all customers
   const [monthSelected, setMonthSelected] = useState([]); // [] = all month columns
 
@@ -205,24 +219,47 @@ export default function CustomersWise({ rows = [], loading = false }) {
       // sale over the last 12 months — guarded like IF(BC=0,1,BC)
       const avg = cnt12 ? lastYear / cnt12 : 0;
       c.baseline = avg === 0 ? 1 : avg;
-      // the customer's color = its LATEST month's cell color
-      c.color = cellColor(monthCols[0] ? c.months[monthCols[0]] : null, c.baseline);
     }
     return [...map.values()].sort((a, b) => b.total - a.total);
-  }, [rows, monthCols]);
+  }, [rows]);
+
+  /* the month columns the Color Wise filter checks, from the scope dropdown
+     (current -> 1st column, previous -> 2nd, third -> 3rd);
+     if the user unchecks everything, fall back to the current month */
+  const scopedMonths = useMemo(() => {
+    const set = new Set();
+    for (const key of colorScope) {
+      const my = monthCols[SCOPE_COL[key]];
+      if (my) set.add(my);
+    }
+    if (set.size === 0 && monthCols[0]) set.add(monthCols[0]);
+    return [...set];
+  }, [colorScope, monthCols]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return customers.filter((c) => {
       if (q && !c.name.toLowerCase().includes(q)) return false;
-      if (colorFilter.length && !colorFilter.includes(c.color)) return false;
+      if (colorFilter.length) {
+        // customer passes only if EVERY selected column has one of the
+        // selected colors (e.g. Current + Previous with Red = red in both)
+        const match = scopedMonths.every((my) =>
+          colorFilter.includes(cellColor(c.months[my], c.baseline))
+        );
+        if (!match) return false;
+      }
       if (custSelected.length && !custSelected.includes(c.name)) return false;
       return true;
     });
-  }, [customers, query, colorFilter, custSelected]);
+  }, [customers, query, colorFilter, custSelected, scopedMonths]);
 
   const toggleColor = (key) =>
     setColorFilter((cur) =>
+      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
+    );
+
+  const toggleScope = (key) =>
+    setColorScope((cur) =>
       cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
     );
 
@@ -237,6 +274,9 @@ export default function CustomersWise({ rows = [], loading = false }) {
     );
 
   const custOptions = useMemo(() => customers.map((c) => c.name), [customers]);
+
+  const scopeIsDefault =
+    colorScope.length === 1 && colorScope[0] === DEFAULT_SCOPE[0];
 
   /* month columns actually shown (Month filter); coloring stays tied to the
      true latest 3 months of the data, whatever columns are visible */
@@ -253,7 +293,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   useEffect(() => {
     setPage(1);
-  }, [query, pageSize, rows.length, colorFilter, custSelected, monthSelected]);
+  }, [query, pageSize, rows.length, colorFilter, colorScope, custSelected, monthSelected]);
 
   const grandTotal = useMemo(
     () => customers.reduce((s, c) => s + c.total, 0),
@@ -314,7 +354,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
         </span>
       </div>
 
-      {/* filter row: color-wise + customer multi-select */}
+      {/* filter row: color-wise + its month scope + customer multi-select */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
         <span className="text-xs font-medium text-slate-500">Color Wise:</span>
         {COLOR_FILTERS.map((cf) => {
@@ -334,6 +374,19 @@ export default function CustomersWise({ rows = [], loading = false }) {
             </button>
           );
         })}
+
+        {/* month scope for the color filter — which column(s) the colors are
+            checked against (default: current month); with several selected,
+            ALL of them must have the chosen color */}
+        <MultiSelectDropdown
+          label="Apply On"
+          options={SCOPE_OPTIONS}
+          selected={colorScope}
+          onToggle={toggleScope}
+          onClear={() => setColorScope(DEFAULT_SCOPE)}
+          formatOption={(k) => SCOPE_LABELS[k]}
+          emptyText="Current month"
+        />
 
         {/* customer multi-select dropdown */}
         <MultiSelectDropdown
@@ -355,10 +408,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
           formatOption={monthLabel}
         />
 
-        {(colorFilter.length > 0 || custSelected.length > 0 || monthSelected.length > 0) && (
+        {(colorFilter.length > 0 || custSelected.length > 0 || monthSelected.length > 0 || !scopeIsDefault) && (
           <button
             onClick={() => {
               setColorFilter([]);
+              setColorScope(DEFAULT_SCOPE);
               setCustSelected([]);
               setMonthSelected([]);
             }}

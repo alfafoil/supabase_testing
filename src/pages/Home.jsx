@@ -17,7 +17,7 @@ const CARDS = [
     ),
   },
   {
-    to: "/users",
+    to: "/testings",
     title: "User Directory",
     desc: "Manage users, roles and salesman IDs fetched live from Supabase.",
     accent: "from-violet-500 to-fuchsia-500",

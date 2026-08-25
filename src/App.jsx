@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import Home from "./pages/Home";
 import UserInfo from "./pages/UserInfo";
 import SalersReport from "./pages/SalersReport";
+import Testings from "./pages/Testings";
 
 /* ---------------- 404 ---------------- */
 
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/sales-report" element={<SalersReport />} />
         <Route path="/users" element={<UserInfo />} />
+        <Route path="/testings" element={<Testings />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
