@@ -1,5 +1,6 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import { useAuth } from "../context/AuthContext";
 
 /* ---------------- module cards ---------------- */
 
@@ -17,7 +18,7 @@ const CARDS = [
     ),
   },
   {
-    to: "/testings",
+    to: "/users",
     title: "User Directory",
     desc: "Manage users, roles and salesman IDs fetched live from Supabase.",
     accent: "from-violet-500 to-fuchsia-500",
@@ -33,8 +34,27 @@ const CARDS = [
 /* ---------------- home page ---------------- */
 
 export default function Home() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 px-4 py-10">
+      {/* logout, top-right */}
+      <button
+        onClick={handleLogout}
+        className="fixed right-4 top-4 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:border-rose-300 hover:text-rose-600"
+      >
+        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M18 12H9m9 0l-3-3m3 3l-3 3" />
+        </svg>
+        Logout
+      </button>
+
       <motion.div
         initial={{ opacity: 0, y: -14 }}
         animate={{ opacity: 1, y: 0 }}
@@ -48,7 +68,7 @@ export default function Home() {
         </div>
         <h1 className="text-3xl font-bold tracking-tight text-slate-900">Sale Manager</h1>
         <p className="mt-2 text-sm text-slate-500">
-          React + Supabase demo — pick a module to get started.
+          {user?.name ? `Welcome back, ${user.name} — ` : ""}pick a module to get started.
         </p>
       </motion.div>
 

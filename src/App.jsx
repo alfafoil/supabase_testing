@@ -1,8 +1,9 @@
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import { AuthProvider, RequireAuth, RequireGuest } from "./context/AuthContext";
 import Home from "./pages/Home";
-import UserInfo from "./pages/UserInfo";
+// import UserInfo from "./pages/userInfo";
 import SalersReport from "./pages/SalersReport";
-import Testings from "./pages/Testings";
+import LoginPage from "./pages/LoginPage";
 
 /* ---------------- 404 ---------------- */
 
@@ -26,13 +27,47 @@ function NotFound() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/sales-report" element={<SalersReport />} />
-        <Route path="/users" element={<UserInfo />} />
-        <Route path="/testings" element={<Testings />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          {/* already logged in? skip straight past the login form */}
+          <Route
+            path="/login"
+            element={
+              <RequireGuest>
+                <LoginPage />
+              </RequireGuest>
+            }
+          />
+
+          {/* everything else requires a logged-in user in localStorage */}
+          <Route
+            path="/"
+            element={
+              <RequireAuth>
+                <Home />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/sales-report"
+            element={
+              <RequireAuth>
+                <SalersReport />
+              </RequireAuth>
+            }
+          />
+          {/* <Route
+            path="/users"
+            element={
+              <RequireAuth>
+                <UserInfo />
+              </RequireAuth>
+            }
+          /> */}
+
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </AuthProvider>
     </BrowserRouter>
   );
 }
