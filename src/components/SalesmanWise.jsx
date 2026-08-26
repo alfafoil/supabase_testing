@@ -420,6 +420,30 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   );
   const recentMonths = useMemo(() => new Set(monthCols.slice(0, 3)), [monthCols]);
 
+  const summaryCols = [
+    { key: "allTimeTotal", label: "GRAND TOTAL" },
+    { key: "lastYear", label: "Last 1 Year" },
+    { key: "last4", label: "Last 4 Month" },
+    { key: "m5to8", label: "5-8 Month" },
+    { key: "m9to12", label: "9-12 Month" },
+  ];
+
+  /* grand-total row totals — summed across the FULL filtered set (every
+     page, not just the one currently shown), for each visible month
+     column and each of the 5 summary columns */
+  const grandTotalsRow = useMemo(() => {
+    const monthTotals = {};
+    for (const my of visibleMonths) {
+      monthTotals[my] = filtered.reduce((sum, s) => sum + (s.months[my] || 0), 0);
+    }
+    const summaryTotals = {};
+    for (const sc of summaryCols) {
+      summaryTotals[sc.key] = filtered.reduce((sum, s) => sum + (Number(s[sc.key]) || 0), 0);
+    }
+    return { monthTotals, summaryTotals };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, visibleMonths]);
+
   /* pagination */
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -437,14 +461,6 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     () => salesmen.reduce((s, x) => s + x.total, 0),
     [salesmen]
   );
-
-  const summaryCols = [
-    { key: "allTimeTotal", label: "GRAND TOTAL" },
-    { key: "lastYear", label: "Last 1 Year" },
-    { key: "last4", label: "Last 4 Month" },
-    { key: "m5to8", label: "5-8 Month" },
-    { key: "m9to12", label: "9-12 Month" },
-  ];
 
   const anyFilterActive =
     colorFilter.length > 0 ||
@@ -758,6 +774,37 @@ export default function SalesmanWise({ rows = [], loading = false }) {
                   </tr>
                 );
               })
+            )}
+
+            {/* grand total row — sums the full filtered set (all pages, not
+                just the current one), colored like the GRAND TOTAL column */}
+            {!loading && filtered.length > 0 && (
+              <tr className="border-t-2 border-amber-200 bg-amber-50/70">
+                {/* frozen label cell */}
+                <td className="sticky left-0 z-10 w-[200px] min-w-[200px] max-w-[200px] border-r border-amber-200 bg-amber-50/70 px-3 py-2.5 shadow-[2px_0_4px_rgba(15,23,42,0.06)]">
+                  <span className="font-semibold text-amber-700">Grand Total</span>
+                </td>
+
+                {/* month totals */}
+                {visibleMonths.map((my) => (
+                  <td
+                    key={my}
+                    className="whitespace-nowrap border-r border-amber-100 bg-amber-50/70 px-3 py-2.5 text-right font-mono font-semibold text-amber-700"
+                  >
+                    {grandTotalsRow.monthTotals[my] ? inr0(grandTotalsRow.monthTotals[my]) : "—"}
+                  </td>
+                ))}
+
+                {/* summary totals */}
+                {summaryCols.map((sc) => (
+                  <td
+                    key={sc.key}
+                    className="whitespace-nowrap border-r border-amber-200 bg-amber-100/70 px-3 py-2.5 text-right font-mono font-bold text-amber-800"
+                  >
+                    {grandTotalsRow.summaryTotals[sc.key] ? inr0(grandTotalsRow.summaryTotals[sc.key]) : "—"}
+                  </td>
+                ))}
+              </tr>
             )}
           </tbody>
         </table>
