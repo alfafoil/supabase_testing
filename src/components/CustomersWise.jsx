@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 /* ---------------- constants / helpers ---------------- */
 
@@ -201,6 +204,7 @@ function MultiSelectDropdown({ label, options, selected, onToggle, onClear, sear
 export default function CustomersWise({ rows = [], loading = false }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [exportType, setExportType] = useState("excel"); // "excel" | "pdf" — default Excel
   const [pageSize, setPageSize] = useState(25); // default 25 per page
 
   /* filters */
@@ -340,7 +344,10 @@ export default function CustomersWise({ rows = [], loading = false }) {
     return map;
   }, [statsRows]);
 
-  /* merge grid pivot + stats into the final per-customer rows */
+  /* merge grid pivot + stats into the final per-customer rows, then RANK
+     them by the highest LAST 1 YEAR figure — rank 1 = highest Last 1 Year
+     total, rank 2 = next highest, and so on — and sort the rows in that
+     same ascending-rank order */
   const customers = useMemo(() => {
     const list = [...customersBase.values()].map((c) => {
       const s = statsByName.get(c.name) || { last4: 0, m5to8: 0, m9to12: 0, lastYear: 0, baseline: 1 };
@@ -353,7 +360,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
         baseline: s.baseline,
       };
     });
-    return list.sort((a, b) => b.total - a.total);
+    list.sort((a, b) => b.lastYear - a.lastYear);
+    list.forEach((c, i) => {
+      c.rank = i + 1;
+    });
+    return list;
   }, [customersBase, statsByName]);
 
   /* the month columns the Color Wise filter checks, from the scope dropdown
@@ -475,6 +486,50 @@ export default function CustomersWise({ rows = [], loading = false }) {
     { key: "m9to12", label: "9-12 Month" },
   ];
 
+  /* export the currently filtered table (the FULL filtered set, every
+     page — not just the page on screen): Rank + Customer Name + every
+     visible month column + the 4 summary columns, in the same
+     left-to-right order as the table itself. Downloads as .xlsx or .pdf
+     depending on the "type" dropdown next to the Export button. */
+  const handleExport = () => {
+    if (!filtered.length) return;
+
+    const data = filtered.map((c) => {
+      const row = { Rank: c.rank, "Customer Name": c.name };
+      visibleMonths.forEach((my) => {
+        row[monthLabel(my)] = c.months[my] ?? "";
+      });
+      summaryCols.forEach((s) => {
+        row[s.label] = c[s.key] ?? "";
+      });
+      return row;
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    if (exportType === "pdf") {
+      const headers = Object.keys(data[0]);
+      const body = data.map((row) =>
+        headers.map((h) => (typeof row[h] === "number" ? inr0(row[h]) : row[h] || "—"))
+      );
+      const doc = new jsPDF({ orientation: "landscape" });
+      doc.setFontSize(12);
+      doc.text("Customer Wise Summary", 14, 10);
+      autoTable(doc, {
+        head: [headers],
+        body,
+        startY: 14,
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { fillColor: [251, 191, 36], textColor: [120, 53, 15] }, // amber
+      });
+      doc.save(`Customer_Wise_Summary_${stamp}.pdf`);
+    } else {
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Customer Wise");
+      XLSX.writeFile(wb, `Customer_Wise_Summary_${stamp}.xlsx`);
+    }
+  };
+
   const anyFilterActive =
     colorFilter.length > 0 ||
     custSelected.length > 0 ||
@@ -520,6 +575,29 @@ export default function CustomersWise({ rows = [], loading = false }) {
           <span className="whitespace-nowrap text-xs text-slate-500">
             Total: <span className="font-semibold text-slate-700">₹ {inr0(grandTotal)}</span>
           </span>
+          <button
+            onClick={handleExport}
+            disabled={!filtered.length}
+            title={`Download the filtered table as ${exportType === "pdf" ? "a PDF" : "an Excel"} file`}
+            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+            Export
+          </button>
+
+          {/* export file-type picker — defaults to Excel */}
+          <select
+            value={exportType}
+            onChange={(e) => setExportType(e.target.value)}
+            title="Export file format"
+            className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 outline-none transition-colors focus:border-orange-400"
+          >
+            <option value="excel">Excel</option>
+            <option value="pdf">PDF</option>
+          </select>
+
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -715,7 +793,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
             <tr className="border-b border-slate-200 bg-slate-50">
               {/* frozen customer column */}
               <th className="sticky left-0 z-20 w-[200px] min-w-[200px] max-w-[200px] border-r border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-600 shadow-[2px_0_4px_rgba(15,23,42,0.06)]">
-                <span className="mr-2 font-mono text-slate-400">SL</span>Customer Name
+                <span className="mr-2 font-mono text-slate-400">Rank</span>Customer Name
               </th>
 
               {/* month columns — newest first */}
@@ -754,21 +832,21 @@ export default function CustomersWise({ rows = [], loading = false }) {
                 </td>
               </tr>
             ) : (
-              paginated.map((c, i) => {
-                const rank = (currentPage - 1) * pageSize + i + 1;
+              paginated.map((c) => {
                 return (
                   <tr
                     key={c.name}
                     className="group border-b border-slate-100 transition-colors hover:bg-orange-50/50"
                   >
-                    {/* frozen customer cell */}
+                    {/* frozen customer cell — rank is fixed to the customer
+                        (by Last 1 Year), not to its position on the page */}
                     <td
                       className="sticky left-0 z-10 w-[200px] min-w-[200px] max-w-[200px] border-r border-slate-200 bg-white px-3 py-2 shadow-[2px_0_4px_rgba(15,23,42,0.06)] group-hover:bg-orange-50"
                       title={c.name}
                     >
                       <div className="flex items-center gap-1.5 overflow-hidden">
-                        <span className="w-6 shrink-0 text-right font-mono text-[10px] text-slate-400">
-                          {rank}
+                        <span className="w-7 shrink-0 text-center font-mono text-[10px] text-slate-400">
+                          {c.rank}
                         </span>
                         <span className="truncate font-medium text-slate-700">{c.name}</span>
                       </div>

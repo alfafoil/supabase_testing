@@ -14,6 +14,9 @@ import {
 import { fetchSalesReport } from "../supabase/sales_report";
 import CustomersWise from "../components/CustomersWise";
 import SalesmanWise from "../components/SalesmanWise";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 /* ---------------- constants ---------------- */
 
@@ -305,6 +308,7 @@ export default function SalersReport() {
   const [month, setMonth] = useState("");
   const [customers, setCustomers] = useState([]); // Customer Wise multi-select ([] = all)
   const [page, setPage] = useState(1);
+  const [exportType, setExportType] = useState("excel"); // "excel" | "pdf" — default Excel
 
   /* fetch once + apply default filters (current FY / current month) */
   useEffect(() => {
@@ -449,6 +453,61 @@ export default function SalersReport() {
     { key: "debit", label: "Debit" },
     { key: "salesman_name", label: "Salesman" },
   ];
+
+  /* export the currently filtered records (the FULL filtered set, every
+     page — not just the page on screen), plus a trailing Grand Total row
+     matching the one shown in the table. Downloads as .xlsx or .pdf
+     depending on the "type" dropdown next to the Export button. */
+  const handleExport = () => {
+    if (!filtered.length) return;
+
+    const data = filtered.map((r) => ({
+      Date: r.date || "",
+      "Vch No": r.vch_no || "",
+      Customers: r.particulars || "",
+      Debit: Number(r.debit) || 0,
+      Salesman: r.salesman_name || "",
+    }));
+    data.push({
+      Date: "",
+      "Vch No": "",
+      Customers: "Grand Total",
+      Debit: totalDebit,
+      Salesman: "",
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    if (exportType === "pdf") {
+      const headers = ["Date", "Vch No", "Customers", "Debit", "Salesman"];
+      const body = data.map((row) =>
+        headers.map((h) => (h === "Debit" ? `Rs. ${inr(row[h])}` : row[h] || "—"))
+      );
+      const doc = new jsPDF({ orientation: "landscape" });
+      doc.setFontSize(12);
+      doc.text("Sales Report Records", 14, 10);
+      autoTable(doc, {
+        head: [headers],
+        body,
+        startY: 14,
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: [251, 191, 36], textColor: [120, 53, 15] }, // amber
+        didParseCell: (hookData) => {
+          // bold + amber-tint the trailing Grand Total row
+          if (hookData.section === "body" && hookData.row.index === body.length - 1) {
+            hookData.cell.styles.fontStyle = "bold";
+            hookData.cell.styles.fillColor = [254, 243, 199];
+            hookData.cell.styles.textColor = [120, 53, 15];
+          }
+        },
+      });
+      doc.save(`Sales_Report_${stamp}.pdf`);
+    } else {
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sales Report");
+      XLSX.writeFile(wb, `Sales_Report_${stamp}.xlsx`);
+    }
+  };
 
   const menuItemClass = (active) =>
     `flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
@@ -745,10 +804,34 @@ export default function SalersReport() {
                     {filtered.length}
                   </span>
                 </div>
-                <span className="text-xs text-slate-500">
-                  Total Debit:{" "}
-                  <span className="font-semibold text-slate-700">₹ {inr(totalDebit)}</span>
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-slate-500">
+                    Total Debit:{" "}
+                    <span className="font-semibold text-slate-700">₹ {inr(totalDebit)}</span>
+                  </span>
+                  <button
+                    onClick={handleExport}
+                    disabled={!filtered.length}
+                    title={`Download the filtered records as ${exportType === "pdf" ? "a PDF" : "an Excel"} file`}
+                    className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    Export
+                  </button>
+
+                  {/* export file-type picker — defaults to Excel */}
+                  <select
+                    value={exportType}
+                    onChange={(e) => setExportType(e.target.value)}
+                    title="Export file format"
+                    className="cursor-pointer rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 outline-none transition-colors focus:border-orange-400"
+                  >
+                    <option value="excel">Excel</option>
+                    <option value="pdf">PDF</option>
+                  </select>
+                </div>
               </div>
 
               {/* mobile: rows as cards */}
@@ -790,6 +873,16 @@ export default function SalersReport() {
                         </div>
                       </motion.div>
                     ))}
+
+                    {/* grand total card — sums the full filtered set (all pages) */}
+                    {filtered.length > 0 && (
+                      <div className="rounded-xl border-2 border-amber-200 bg-amber-50/70 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-semibold text-amber-700">Grand Total</span>
+                          <span className="text-sm font-bold text-amber-700">₹ {inr(totalDebit)}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -842,6 +935,21 @@ export default function SalersReport() {
                           </td>
                         </motion.tr>
                       ))
+                    )}
+
+                    {/* grand total row — sums the full filtered set (all pages),
+                        colored like the GRAND TOTAL column on the Customer/
+                        Salesman Wise pivots */}
+                    {!loading && filtered.length > 0 && (
+                      <tr className="border-t-2 border-amber-200 bg-amber-50/70">
+                        <td colSpan={3} className="px-2 py-3 text-right font-semibold text-amber-700 lg:px-3">
+                          Grand Total
+                        </td>
+                        <td className="px-2 py-3 font-bold text-amber-700 lg:px-3">
+                          ₹ {inr(totalDebit)}
+                        </td>
+                        <td className="px-2 py-3 text-amber-400 lg:px-3">—</td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
