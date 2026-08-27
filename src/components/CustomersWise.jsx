@@ -57,17 +57,20 @@ const COLOR_CLS = {
   red: "bg-rose-200/80 text-rose-400",
 };
 
+/* Color Wise chips — Red ("no sale") is intentionally NOT here anymore;
+   it has its own dedicated filter (with its own "Apply On" scope) right
+   under the color legend, since it needs to be checked independently of
+   Green/Yellow/Blue. */
 const COLOR_FILTERS = [
   { key: "green", label: "Green", dot: "bg-emerald-400" },
   { key: "yellow", label: "Yellow", dot: "bg-yellow-400" },
   { key: "blue", label: "Blue", dot: "bg-blue-600" },
-  { key: "red", label: "Red", dot: "bg-rose-400" },
 ];
 
-/* which month column the Color Wise filter is applied on —
-   each option maps to ONE column: current = 1st (newest) column,
-   previous = 2nd column, third = 3rd column. Selecting several means
-   the color must match in ALL of the selected columns. */
+/* which month column a scope-based filter (Color Wise, or the dedicated
+   Red filter) is applied on — each option maps to ONE column: current =
+   1st (newest) column, previous = 2nd column, third = 3rd column.
+   Selecting several means the condition must hold in ALL of them. */
 const SCOPE_OPTIONS = ["current", "previous", "third"];
 const SCOPE_LABELS = {
   current: "Current Month (1st column)",
@@ -97,6 +100,7 @@ const SPECIAL_COL_LABELS = {
 const OPERATION_OPTIONS = [
   { key: "more", label: "More Than" },
   { key: "less", label: "Less Than" },
+  { key: "equal", label: "Equal To" },
   { key: "between", label: "In Between" },
 ];
 
@@ -217,19 +221,24 @@ export default function CustomersWise({ rows = [], loading = false }) {
   const [pageSize, setPageSize] = useState(25); // default 25 per page
 
   /* filters */
-  const [colorFilter, setColorFilter] = useState([]); // [] = all colors
+  const [colorFilter, setColorFilter] = useState([]); // [] = all colors (Green/Yellow/Blue only)
   const [colorScope, setColorScope] = useState(DEFAULT_SCOPE); // which months the color filter checks
   const [salesmanFilter, setSalesmanFilter] = useState([]); // [] = all salesmen
   const [fyFilter, setFyFilter] = useState([]); // [] = all financial years
   const [custSelected, setCustSelected] = useState([]); // [] = all customers
   const [monthSelected, setMonthSelected] = useState([]); // [] = all month columns
 
+  /* dedicated Red ("no sale") filter — separate from Color Wise so its
+     month scope can be set independently */
+  const [redFilter, setRedFilter] = useState(false);
+  const [redScope, setRedScope] = useState(DEFAULT_SCOPE);
+
   /* Special Filter — number filter on the 4 trailing-month summary columns.
      "Apply On" defaults to Last 1 Year; the filter itself only activates
      once an Operation + value are also chosen. */
-  const [specialOp, setSpecialOp] = useState(""); // "" | "more" | "less" | "between"
+  const [specialOp, setSpecialOp] = useState(""); // "" | "more" | "less" | "equal" | "between"
   const [specialCols, setSpecialCols] = useState(["lastYear"]); // subset of SPECIAL_COL_OPTIONS
-  const [specialValue, setSpecialValue] = useState(""); // lakhs, for more/less
+  const [specialValue, setSpecialValue] = useState(""); // lakhs, for more/less/equal
   const [specialFrom, setSpecialFrom] = useState(""); // lakhs, for between
   const [specialTo, setSpecialTo] = useState(""); // lakhs, for between
 
@@ -294,16 +303,18 @@ export default function CustomersWise({ rows = [], loading = false }) {
   }, [gridRows]);
 
   /* pivot: one row per customer (particulars), one cell per month —
-     built from gridRows so Salesman/FY narrow the grid itself */
+     built from gridRows so Salesman/FY narrow the grid itself; also
+     tracks the set of salesmen who sold to this customer, for export */
   const customersBase = useMemo(() => {
     const map = new Map();
     for (const r of gridRows) {
       const name = (r.particulars || "Unknown").trim();
-      if (!map.has(name)) map.set(name, { name, total: 0, months: {} });
+      if (!map.has(name)) map.set(name, { name, total: 0, months: {}, salesmen: new Set() });
       const c = map.get(name);
       const amt = Number(r.debit) || 0;
       c.total += amt;
       if (r.month_year) c.months[r.month_year] = (c.months[r.month_year] || 0) + amt;
+      if (r.salesman_name) c.salesmen.add(r.salesman_name.trim());
     }
     return map;
   }, [gridRows]);
@@ -404,6 +415,18 @@ export default function CustomersWise({ rows = [], loading = false }) {
     return [...set];
   }, [colorScope, monthCols]);
 
+  /* the month columns the dedicated Red ("no sale") filter checks — same
+     idea as scopedMonths above, but with its own independent scope state */
+  const redScopedMonths = useMemo(() => {
+    const set = new Set();
+    for (const key of redScope) {
+      const my = monthCols[SCOPE_COL[key]];
+      if (my) set.add(my);
+    }
+    if (set.size === 0 && monthCols[0]) set.add(monthCols[0]);
+    return [...set];
+  }, [redScope, monthCols]);
+
   /* is the Special Filter actually configured enough to apply? */
   const specialActive =
     specialOp &&
@@ -418,6 +441,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
       const v = Number(c[key]) || 0;
       if (specialOp === "more") return v > Number(specialValue) * LAKH;
       if (specialOp === "less") return v < Number(specialValue) * LAKH;
+      if (specialOp === "equal") return v === Number(specialValue) * LAKH;
       if (specialOp === "between") {
         const from = specialFrom.trim() !== "" ? Number(specialFrom) * LAKH : -Infinity;
         const to = specialTo.trim() !== "" ? Number(specialTo) * LAKH : Infinity;
@@ -433,11 +457,17 @@ export default function CustomersWise({ rows = [], loading = false }) {
       if (q && !c.name.toLowerCase().includes(q)) return false;
       if (colorFilter.length) {
         // customer passes only if EVERY selected column has one of the
-        // selected colors (e.g. Current + Previous with Red = red in both)
+        // selected colors (e.g. Current + Previous with Blue = blue in both)
         const match = scopedMonths.every((my) =>
           colorFilter.includes(cellColor(c.months[my], c.baseline))
         );
         if (!match) return false;
+      }
+      // dedicated Red ("no sale") filter — every column in its own scope
+      // must be blank; independent of, and combinable with, Color Wise
+      if (redFilter) {
+        const allBlank = redScopedMonths.every((my) => c.months[my] == null);
+        if (!allBlank) return false;
       }
       if (custSelected.length && !custSelected.includes(c.name)) return false;
       // Special Filter can be combined with Color Wise — both apply together
@@ -445,7 +475,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, query, colorFilter, custSelected, scopedMonths, specialActive, specialOp, specialCols, specialValue, specialFrom, specialTo]);
+  }, [customers, query, colorFilter, custSelected, scopedMonths, redFilter, redScopedMonths, specialActive, specialOp, specialCols, specialValue, specialFrom, specialTo]);
 
   const toggleColor = (key) =>
     setColorFilter((cur) =>
@@ -454,6 +484,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   const toggleScope = (key) =>
     setColorScope((cur) =>
+      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
+    );
+
+  const toggleRedScope = (key) =>
+    setRedScope((cur) =>
       cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
     );
 
@@ -477,6 +512,9 @@ export default function CustomersWise({ rows = [], loading = false }) {
   const scopeIsDefault =
     colorScope.length === 1 && colorScope[0] === DEFAULT_SCOPE[0];
 
+  const redScopeIsDefault =
+    redScope.length === 1 && redScope[0] === DEFAULT_SCOPE[0];
+
   /* month columns actually shown (Month filter); coloring stays tied to the
      true latest 3 months of the data, whatever columns are visible */
   const visibleMonths = useMemo(
@@ -495,6 +533,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
   }, [
     query, pageSize, rows.length, colorFilter, colorScope,
     salesmanFilter, fyFilter, custSelected, monthSelected,
+    redFilter, redScope,
     specialOp, specialCols, specialValue, specialFrom, specialTo,
     rankOn,
   ]);
@@ -504,32 +543,36 @@ export default function CustomersWise({ rows = [], loading = false }) {
     [customers]
   );
 
+  /* summary column order, as displayed and exported:
+     GRAND TOTAL, Last 4 Month, 5-8 Month, 9-12 Month, Last 1 Year */
   const summaryCols = [
     { key: "allTimeTotal", label: "GRAND TOTAL" },
-    { key: "lastYear", label: "Last 1 Year" },
     { key: "last4", label: "Last 4 Month" },
     { key: "m5to8", label: "5-8 Month" },
     { key: "m9to12", label: "9-12 Month" },
+    { key: "lastYear", label: "Last 1 Year" },
   ];
 
-  /* export the currently filtered table (the FULL filtered set, every
-     page — not just the page on screen): Rank + Customer Name + every
-     visible month column + the 5 summary columns, in the same
-     left-to-right order as the table itself. Downloads as .xlsx or .pdf
-     depending on the "type" dropdown next to the Export button. */
+  /* export the currently filtered set (every page, not just the page on
+     screen) as just THREE columns: Rank, Customer Name, Salesman Name —
+     no month or summary columns. Rows are sorted by Salesman Name
+     (ascending), not by rank, so a customer's row lands next to the
+     salesman who covers them. Downloads as .xlsx or .pdf depending on
+     the "type" dropdown next to the Export button. */
   const handleExport = () => {
     if (!filtered.length) return;
 
-    const data = filtered.map((c) => {
-      const row = { Rank: c.rank, "Customer Name": c.name };
-      visibleMonths.forEach((my) => {
-        row[monthLabel(my)] = c.months[my] ?? "";
-      });
-      summaryCols.forEach((s) => {
-        row[s.label] = c[s.key] ?? "";
-      });
-      return row;
-    });
+    const salesmanNameOf = (c) => [...c.salesmen].sort().join(", ") || "—";
+
+    const bySalesman = [...filtered].sort((a, b) =>
+      salesmanNameOf(a).localeCompare(salesmanNameOf(b))
+    );
+
+    const data = bySalesman.map((c) => ({
+      Rank: c.rank,
+      "Customer Name": c.name,
+      "Salesman Name": salesmanNameOf(c),
+    }));
     const stamp = new Date().toISOString().slice(0, 10);
 
     if (exportType === "pdf") {
@@ -564,7 +607,9 @@ export default function CustomersWise({ rows = [], loading = false }) {
     fyFilter.length > 0 ||
     specialActive ||
     !scopeIsDefault ||
-    rankOn !== DEFAULT_RANK_ON;
+    rankOn !== DEFAULT_RANK_ON ||
+    redFilter ||
+    !redScopeIsDefault;
 
   const clearAllFilters = () => {
     setColorFilter([]);
@@ -579,6 +624,8 @@ export default function CustomersWise({ rows = [], loading = false }) {
     setSpecialFrom("");
     setSpecialTo("");
     setRankOn(DEFAULT_RANK_ON);
+    setRedFilter(false);
+    setRedScope(DEFAULT_SCOPE);
   };
 
   return (
@@ -652,7 +699,8 @@ export default function CustomersWise({ rows = [], loading = false }) {
         </span>
       </div>
 
-      {/* filter row: color-wise + its month scope + salesman/FY/customer/month */}
+      {/* filter row: color-wise + its month scope + the dedicated Red (no
+          sale) filter + FY/month */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
         <span className="text-xs font-medium text-slate-500">Color Wise:</span>
         {COLOR_FILTERS.map((cf) => {
@@ -686,14 +734,29 @@ export default function CustomersWise({ rows = [], loading = false }) {
           emptyText="Current month"
         />
 
-        {/* salesman multi-select dropdown */}
+        {/* dedicated Red ("no sale") filter — own toggle + own "Apply On"
+            scope, independent of the Green/Yellow/Blue color filter above */}
+        <button
+          onClick={() => setRedFilter((v) => !v)}
+          title="Customer has NO sale in the selected month column(s)"
+          className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+            redFilter
+              ? "border-rose-400 bg-rose-500 text-white shadow"
+              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${redFilter ? "bg-white" : "bg-rose-400"}`} />
+          Red (No Sale)
+        </button>
+
         <MultiSelectDropdown
-          label="Salesman"
-          options={salesmanOptions}
-          selected={salesmanFilter}
-          onToggle={toggleSalesman}
-          onClear={() => setSalesmanFilter([])}
-          searchable
+          label="Apply On"
+          options={SCOPE_OPTIONS}
+          selected={redScope}
+          onToggle={toggleRedScope}
+          onClear={() => setRedScope(DEFAULT_SCOPE)}
+          formatOption={(k) => SCOPE_LABELS[k]}
+          emptyText="Current month"
         />
 
         {/* FY multi-select dropdown */}
@@ -703,16 +766,6 @@ export default function CustomersWise({ rows = [], loading = false }) {
           selected={fyFilter}
           onToggle={toggleFy}
           onClear={() => setFyFilter([])}
-        />
-
-        {/* customer multi-select dropdown */}
-        <MultiSelectDropdown
-          label="Customers"
-          options={custOptions}
-          selected={custSelected}
-          onToggle={toggleCustomer}
-          onClear={() => setCustSelected([])}
-          searchable
         />
 
         {/* month multi-select dropdown (chooses which month columns are shown) */}
@@ -739,6 +792,26 @@ export default function CustomersWise({ rows = [], loading = false }) {
           summary columns; combines together with Color Wise, doesn't replace it */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
         <span className="text-xs font-medium text-slate-500">Special Filter:</span>
+
+        {/* salesman multi-select dropdown */}
+        <MultiSelectDropdown
+          label="Salesman"
+          options={salesmanOptions}
+          selected={salesmanFilter}
+          onToggle={toggleSalesman}
+          onClear={() => setSalesmanFilter([])}
+          searchable
+        />
+
+        {/* customer multi-select dropdown */}
+        <MultiSelectDropdown
+          label="Customers"
+          options={custOptions}
+          selected={custSelected}
+          onToggle={toggleCustomer}
+          onClear={() => setCustSelected([])}
+          searchable
+        />
 
         <select
           value={specialOp}

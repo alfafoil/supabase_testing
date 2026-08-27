@@ -64,7 +64,9 @@ const COLOR_FILTERS = [
   { key: "red", label: "Red", dot: "bg-rose-400" },
 ];
 
-/* which month column the Color Wise filter is applied on */
+/* which month column a Color Wise scope is applied on — Green/Yellow share
+   ONE scope (colorScope below), Red has its OWN independent scope
+   (redScope below), each picked from the same three options. */
 const SCOPE_OPTIONS = ["current", "previous", "third"];
 const SCOPE_LABELS = {
   current: "Current Month (1st column)",
@@ -74,37 +76,21 @@ const SCOPE_LABELS = {
 const DEFAULT_SCOPE = ["current"];
 const SCOPE_COL = { current: 0, previous: 1, third: 2 };
 
-/* the four trailing-month summary columns — each is the MAXIMUM of any
-   single month's total debit within its range (not a sum), relative to
-   today, EXCLUDING the current (in-progress) month:
-     Last 4 Month : month -1 .. month -5
-     5-8 Month    : month -6 .. month -9
-     9-12 Month   : month -10 .. month -13
-     Last 1 Year  : month -1 .. month -13
-   (the "baseline" used for the latest-3-months color coding is a
-   separate, unaffected average — see statsByName below) */
-const SPECIAL_COL_OPTIONS = ["lastYear", "last4", "m5to8", "m9to12"];
-const SPECIAL_COL_LABELS = {
-  lastYear: "Last 1 Year",
-  last4: "Last 4 Month",
-  m5to8: "5-8 Month",
-  m9to12: "9-12 Month",
-};
-
 const OPERATION_OPTIONS = [
   { key: "more", label: "More Than" },
   { key: "less", label: "Less Than" },
+  { key: "equal", label: "Equal To" },
   { key: "between", label: "In Between" },
 ];
 
 /* Rank On — which summary figure decides the Rank column / row order.
-   Defaults to LAST 1 YEAR, matching the existing behavior. */
-const RANK_ON_OPTIONS = ["lastYear", "allTimeTotal"];
+   Defaults to FY TOTAL. */
+const RANK_ON_OPTIONS = ["allTimeTotal", "fyTotal"];
 const RANK_ON_LABELS = {
-  lastYear: "LAST 1 YEAR",
   allTimeTotal: "GRAND TOTAL",
+  fyTotal: "FY TOTAL",
 };
-const DEFAULT_RANK_ON = "lastYear";
+const DEFAULT_RANK_ON = "fyTotal";
 
 const LAKH = 100000;
 
@@ -214,23 +200,22 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   const [exportType, setExportType] = useState("excel"); // "excel" | "pdf" — default Excel
 
   /* filters */
-  const [colorFilter, setColorFilter] = useState([]); // [] = all colors
-  const [colorScope, setColorScope] = useState(DEFAULT_SCOPE);
+  const [colorFilter, setColorFilter] = useState([]); // [] = all colors (Green/Yellow/Red)
+  const [colorScope, setColorScope] = useState(DEFAULT_SCOPE); // Apply On for Green & Yellow
+  const [redScope, setRedScope] = useState(DEFAULT_SCOPE); // Apply On for Red only
   const [fyFilter, setFyFilter] = useState([]); // [] = all financial years
   const [salesSelected, setSalesSelected] = useState([]); // [] = all salesmen
   const [monthSelected, setMonthSelected] = useState([]); // [] = all month columns
 
-  /* Special Filter — number filter on the 4 trailing-month summary columns.
-     "Apply On" defaults to Last 1 Year; the filter itself only activates
-     once an Operation + value are also chosen. */
-  const [specialOp, setSpecialOp] = useState(""); // "" | "more" | "less" | "between"
-  const [specialCols, setSpecialCols] = useState(["lastYear"]); // subset of SPECIAL_COL_OPTIONS
-  const [specialValue, setSpecialValue] = useState(""); // lakhs, for more/less
+  /* Special Filter — number filter on FY TOTAL only.
+     The filter itself only activates once an Operation + value are chosen. */
+  const [specialOp, setSpecialOp] = useState(""); // "" | "more" | "less" | "equal" | "between"
+  const [specialValue, setSpecialValue] = useState(""); // lakhs, for more/less/equal
   const [specialFrom, setSpecialFrom] = useState(""); // lakhs, for between
   const [specialTo, setSpecialTo] = useState(""); // lakhs, for between
 
-  /* Rank On — decides which figure (Last 1 Year or Grand Total) the Rank
-     column / row order is based on. Defaults to Last 1 Year. */
+  /* Rank On — decides which figure (Grand Total or FY Total) the Rank
+     column / row order is based on. Defaults to FY Total. */
   const [rankOn, setRankOn] = useState(DEFAULT_RANK_ON);
 
   /* default the FY filter to the current financial year, once, as soon as
@@ -280,18 +265,24 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     return map;
   }, [gridRows]);
 
-  /* summary stats — GRAND TOTAL (sum of all sales, all-time) plus Last 1
-     Year / Last 4 Month / 5-8 / 9-12 (max single month within range) and
-     the coloring baseline (average) — all computed from the FULL,
-     un-FY-filtered data, since none of these should move with the FY filter */
+  /* summary stats — GRAND TOTAL (sum of all sales, all-time) and FY TOTAL
+     (sum of sales in the CURRENT financial year, regardless of the FY
+     filter above) plus the coloring baseline (average) — all computed
+     from the FULL, un-FY-filtered data, since none of these should move
+     with the FY filter */
   const statsByName = useMemo(() => {
     const monthSums = new Map(); // name -> Map(month_year -> sum)
     const allTimeTotals = new Map(); // name -> sum of every sale, ever
+    const fyTotals = new Map(); // name -> sum of sales in the CURRENT FY only
+    const currentFy = fyOfDate(new Date());
 
     for (const r of rows) {
       const name = (r.salesman_name || "Unassigned").trim();
       const amt = Number(r.debit) || 0;
       allTimeTotals.set(name, (allTimeTotals.get(name) || 0) + amt);
+      if (r.fy === currentFy) {
+        fyTotals.set(name, (fyTotals.get(name) || 0) + amt);
+      }
       if (!r.month_year) continue;
       if (!monthSums.has(name)) monthSums.set(name, new Map());
       const m = monthSums.get(name);
@@ -303,8 +294,10 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
     const map = new Map();
     for (const [name, allTimeTotal] of allTimeTotals.entries()) {
-      let last4 = 0, m5to8 = 0, m9to12 = 0, lastYear = 0;
-      let baselineSum = 0, baselineCnt = 0; // separate, unaffected average
+      // the coloring baseline stays an AVERAGE over the trailing 12 months
+      // (excluding the current, in-progress month) — this only feeds the
+      // Color Wise / cell-coloring logic, not any summary column
+      let baselineSum = 0, baselineCnt = 0;
 
       const monthMap = monthSums.get(name);
       if (monthMap) {
@@ -312,15 +305,6 @@ export default function SalesmanWise({ rows = [], loading = false }) {
           const idx = monthIndex(my);
           if (idx == null) continue;
           const diff = nowIdx - idx; // 1 = last month, 2 = two months ago, …
-
-          // the four displayed columns — maximum single month within range
-          if (diff >= 1 && diff <= 13) lastYear = Math.max(lastYear, sum);
-          if (diff >= 1 && diff <= 5) last4 = Math.max(last4, sum);
-          if (diff >= 6 && diff <= 9) m5to8 = Math.max(m5to8, sum);
-          if (diff >= 10 && diff <= 13) m9to12 = Math.max(m9to12, sum);
-
-          // baseline for the latest-3-months color coding stays an AVERAGE
-          // over the trailing 12 months — untouched by the max-column change
           if (diff >= 1 && diff <= 12) {
             baselineSum += sum;
             baselineCnt += 1;
@@ -330,7 +314,8 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
       const avg = baselineCnt ? baselineSum / baselineCnt : 0;
       map.set(name, {
-        allTimeTotal, last4, m5to8, m9to12, lastYear,
+        allTimeTotal,
+        fyTotal: fyTotals.get(name) || 0,
         baseline: avg === 0 ? 1 : avg,
       });
     }
@@ -338,14 +323,13 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   }, [rows]);
 
   /* merge grid pivot + stats into the final per-salesman rows, then RANK
-     them by the figure chosen in "Rank On" (defaults to LAST 1 YEAR, can
-     be switched to GRAND TOTAL) — rank 1 = highest, rank 2 = next
-     highest, and so on — and sort the rows in that same ascending-rank
-     order */
+     them by the figure chosen in "Rank On" (defaults to FY TOTAL, can be
+     switched to GRAND TOTAL) — rank 1 = highest, rank 2 = next highest,
+     and so on — and sort the rows in that same ascending-rank order */
   const salesmen = useMemo(() => {
     const list = [...salesmenBase.values()].map((s) => {
       const stats = statsByName.get(s.name) || {
-        allTimeTotal: 0, last4: 0, m5to8: 0, m9to12: 0, lastYear: 0, baseline: 1,
+        allTimeTotal: 0, fyTotal: 0, baseline: 1,
       };
       return { ...s, ...stats };
     });
@@ -356,7 +340,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     return list;
   }, [salesmenBase, statsByName, rankOn]);
 
-  /* the month columns the Color Wise filter checks */
+  /* the month columns the Green/Yellow half of Color Wise checks */
   const scopedMonths = useMemo(() => {
     const set = new Set();
     for (const key of colorScope) {
@@ -367,46 +351,69 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     return [...set];
   }, [colorScope, monthCols]);
 
-  /* is the Special Filter actually configured enough to apply? */
+  /* the month columns the Red half of Color Wise checks — independent scope */
+  const redScopedMonths = useMemo(() => {
+    const set = new Set();
+    for (const key of redScope) {
+      const my = monthCols[SCOPE_COL[key]];
+      if (my) set.add(my);
+    }
+    if (set.size === 0 && monthCols[0]) set.add(monthCols[0]);
+    return [...set];
+  }, [redScope, monthCols]);
+
+  /* is the Special Filter actually configured enough to apply? (it only
+     ever checks FY TOTAL now) */
   const specialActive =
     specialOp &&
-    specialCols.length > 0 &&
     (specialOp === "between"
       ? specialFrom.trim() !== "" || specialTo.trim() !== ""
       : specialValue.trim() !== "");
 
   const passesSpecial = (s) => {
     if (!specialActive) return true;
-    return specialCols.every((key) => {
-      const v = Number(s[key]) || 0;
-      if (specialOp === "more") return v > Number(specialValue) * LAKH;
-      if (specialOp === "less") return v < Number(specialValue) * LAKH;
-      if (specialOp === "between") {
-        const from = specialFrom.trim() !== "" ? Number(specialFrom) * LAKH : -Infinity;
-        const to = specialTo.trim() !== "" ? Number(specialTo) * LAKH : Infinity;
-        return v >= from && v <= to;
-      }
-      return true;
-    });
+    const v = Number(s.fyTotal) || 0;
+    if (specialOp === "more") return v > Number(specialValue) * LAKH;
+    if (specialOp === "less") return v < Number(specialValue) * LAKH;
+    if (specialOp === "equal") return v === Number(specialValue) * LAKH;
+    if (specialOp === "between") {
+      const from = specialFrom.trim() !== "" ? Number(specialFrom) * LAKH : -Infinity;
+      const to = specialTo.trim() !== "" ? Number(specialTo) * LAKH : Infinity;
+      return v >= from && v <= to;
+    }
+    return true;
   };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const gySelected = colorFilter.filter((c) => c !== "red"); // Green/Yellow subset
+    const redSelected = colorFilter.includes("red");
+
     return salesmen.filter((s) => {
       if (q && !s.name.toLowerCase().includes(q)) return false;
-      if (colorFilter.length) {
+
+      // Green/Yellow — checked against colorScope
+      if (gySelected.length) {
         const match = scopedMonths.every((my) =>
-          colorFilter.includes(cellColor(s.months[my], s.baseline))
+          gySelected.includes(cellColor(s.months[my], s.baseline))
         );
         if (!match) return false;
       }
+      // Red — checked against its own, independent redScope
+      if (redSelected) {
+        const matchRed = redScopedMonths.every(
+          (my) => cellColor(s.months[my], s.baseline) === "red"
+        );
+        if (!matchRed) return false;
+      }
+
       if (salesSelected.length && !salesSelected.includes(s.name)) return false;
       // Special Filter can be combined with Color Wise — both apply together
       if (!passesSpecial(s)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [salesmen, query, colorFilter, salesSelected, scopedMonths, specialActive, specialOp, specialCols, specialValue, specialFrom, specialTo]);
+  }, [salesmen, query, colorFilter, salesSelected, scopedMonths, redScopedMonths, specialActive, specialOp, specialValue, specialFrom, specialTo]);
 
   const toggleColor = (key) =>
     setColorFilter((cur) =>
@@ -415,6 +422,11 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
   const toggleScope = (key) =>
     setColorScope((cur) =>
+      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
+    );
+
+  const toggleRedScope = (key) =>
+    setRedScope((cur) =>
       cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
     );
 
@@ -428,15 +440,12 @@ export default function SalesmanWise({ rows = [], loading = false }) {
       cur.includes(my) ? cur.filter((m) => m !== my) : [...cur, my]
     );
 
-  const toggleSpecialCol = (key) =>
-    setSpecialCols((cur) =>
-      cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
-    );
-
   const salesOptions = useMemo(() => salesmen.map((s) => s.name), [salesmen]);
 
   const scopeIsDefault =
     colorScope.length === 1 && colorScope[0] === DEFAULT_SCOPE[0];
+  const redScopeIsDefault =
+    redScope.length === 1 && redScope[0] === DEFAULT_SCOPE[0];
 
   /* month columns actually shown; coloring stays tied to the latest 3 months */
   const visibleMonths = useMemo(
@@ -445,17 +454,15 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   );
   const recentMonths = useMemo(() => new Set(monthCols.slice(0, 3)), [monthCols]);
 
+  /* summary columns: just GRAND TOTAL and FY TOTAL */
   const summaryCols = [
     { key: "allTimeTotal", label: "GRAND TOTAL" },
-    { key: "lastYear", label: "Last 1 Year" },
-    { key: "last4", label: "Last 4 Month" },
-    { key: "m5to8", label: "5-8 Month" },
-    { key: "m9to12", label: "9-12 Month" },
+    { key: "fyTotal", label: "FY TOTAL" },
   ];
 
   /* export the currently filtered table (the FULL filtered set, every
      page — not just the page on screen): Rank + Salesman Name + every
-     visible month column + the 5 summary columns, in the same
+     visible month column + the 2 summary columns, in the same
      left-to-right order as the table itself. Downloads as .xlsx or .pdf
      depending on the "type" dropdown next to the Export button. */
   const handleExport = () => {
@@ -499,7 +506,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
   /* grand-total row totals — summed across the FULL filtered set (every
      page, not just the one currently shown), for each visible month
-     column and each of the 5 summary columns */
+     column and each of the 2 summary columns */
   const grandTotalsRow = useMemo(() => {
     const monthTotals = {};
     for (const my of visibleMonths) {
@@ -521,9 +528,9 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   useEffect(() => {
     setPage(1);
   }, [
-    query, pageSize, rows.length, colorFilter, colorScope,
+    query, pageSize, rows.length, colorFilter, colorScope, redScope,
     fyFilter, salesSelected, monthSelected,
-    specialOp, specialCols, specialValue, specialFrom, specialTo,
+    specialOp, specialValue, specialFrom, specialTo,
     rankOn,
   ]);
 
@@ -539,16 +546,17 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     fyFilter.length > 0 ||
     specialActive ||
     !scopeIsDefault ||
+    !redScopeIsDefault ||
     rankOn !== DEFAULT_RANK_ON;
 
   const clearAllFilters = () => {
     setColorFilter([]);
     setColorScope(DEFAULT_SCOPE);
+    setRedScope(DEFAULT_SCOPE);
     setFyFilter([]);
     setSalesSelected([]);
     setMonthSelected([]);
     setSpecialOp("");
-    setSpecialCols([]);
     setSpecialValue("");
     setSpecialFrom("");
     setSpecialTo("");
@@ -623,7 +631,8 @@ export default function SalesmanWise({ rows = [], loading = false }) {
         </span>
       </div>
 
-      {/* filter row: color-wise + its month scope + FY/salesman/month */}
+      {/* filter row: color-wise (Green/Yellow share one Apply On, Red has
+          its own) + FY/month */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
         <span className="text-xs font-medium text-slate-500">Color Wise:</span>
         {COLOR_FILTERS.map((cf) => {
@@ -644,12 +653,24 @@ export default function SalesmanWise({ rows = [], loading = false }) {
           );
         })}
 
+        {/* Apply On for Green & Yellow */}
         <MultiSelectDropdown
           label="Apply On"
           options={SCOPE_OPTIONS}
           selected={colorScope}
           onToggle={toggleScope}
           onClear={() => setColorScope(DEFAULT_SCOPE)}
+          formatOption={(k) => SCOPE_LABELS[k]}
+          emptyText="Current month"
+        />
+
+        {/* Apply On for Red — independent scope */}
+        <MultiSelectDropdown
+          label="Red Apply On"
+          options={SCOPE_OPTIONS}
+          selected={redScope}
+          onToggle={toggleRedScope}
+          onClear={() => setRedScope(DEFAULT_SCOPE)}
           formatOption={(k) => SCOPE_LABELS[k]}
           emptyText="Current month"
         />
@@ -661,16 +682,6 @@ export default function SalesmanWise({ rows = [], loading = false }) {
           selected={fyFilter}
           onToggle={toggleFy}
           onClear={() => setFyFilter([])}
-        />
-
-        {/* salesman multi-select dropdown */}
-        <MultiSelectDropdown
-          label="Salesmen"
-          options={salesOptions}
-          selected={salesSelected}
-          onToggle={toggleSalesman}
-          onClear={() => setSalesSelected([])}
-          searchable
         />
 
         {/* month multi-select dropdown (chooses which month columns are shown) */}
@@ -693,10 +704,20 @@ export default function SalesmanWise({ rows = [], loading = false }) {
         )}
       </div>
 
-      {/* Special Filter row — numeric filter (in lakhs) on the 4 trailing-month
-          summary columns; combines together with Color Wise, doesn't replace it */}
+      {/* Special Filter row — numeric filter (in lakhs) on FY TOTAL only;
+          combines together with Color Wise, doesn't replace it */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
         <span className="text-xs font-medium text-slate-500">Special Filter:</span>
+
+        {/* salesman multi-select dropdown */}
+        <MultiSelectDropdown
+          label="Salesmen"
+          options={salesOptions}
+          selected={salesSelected}
+          onToggle={toggleSalesman}
+          onClear={() => setSalesSelected([])}
+          searchable
+        />
 
         <select
           value={specialOp}
@@ -744,20 +765,10 @@ export default function SalesmanWise({ rows = [], loading = false }) {
           </span>
         )}
 
-        {/* which of the 4 summary columns this operation checks — multiple
-            selectable; ALL selected columns must satisfy the condition */}
-        <MultiSelectDropdown
-          label="Apply On"
-          options={SPECIAL_COL_OPTIONS}
-          selected={specialCols}
-          onToggle={toggleSpecialCol}
-          onClear={() => setSpecialCols([])}
-          formatOption={(k) => SPECIAL_COL_LABELS[k]}
-          emptyText="Choose columns"
-        />
+        <span className="text-[11px] text-slate-400">on FY TOTAL</span>
 
         {/* Rank On — chooses whether the Rank column / row order is based
-            on Last 1 Year (default) or Grand Total */}
+            on Grand Total or FY Total (default) */}
         <span className="flex items-center gap-1.5">
           <span className="text-[11px] text-slate-400">Rank On</span>
           <select
@@ -774,11 +785,10 @@ export default function SalesmanWise({ rows = [], loading = false }) {
           </select>
         </span>
 
-        {(specialOp || specialCols.length > 0 || specialValue || specialFrom || specialTo || rankOn !== DEFAULT_RANK_ON) && (
+        {(specialOp || specialValue || specialFrom || specialTo || rankOn !== DEFAULT_RANK_ON) && (
           <button
             onClick={() => {
               setSpecialOp("");
-              setSpecialCols([]);
               setSpecialValue("");
               setSpecialFrom("");
               setSpecialTo("");
