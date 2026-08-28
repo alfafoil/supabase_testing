@@ -380,12 +380,12 @@ export default function SalersReport() {
         return false;
       return true;
     });
-    // Vch No — descending (numeric-aware)
-    return list.sort((a, b) =>
-      String(b.vch_no ?? "").localeCompare(String(a.vch_no ?? ""), undefined, {
-        numeric: true,
-      })
-    );
+    // Date — descending; rows with unparseable/missing dates sink to the bottom
+    return list.sort((a, b) => {
+      const bt = b._d ? b._d.getTime() : -Infinity;
+      const at = a._d ? a._d.getTime() : -Infinity;
+      return bt - at;
+    });
   }, [rows, kpiFilter, salesman, fy, month, customers, now]);
 
   /* reset pagination whenever the result set changes */

@@ -83,15 +83,6 @@ const OPERATION_OPTIONS = [
   { key: "between", label: "In Between" },
 ];
 
-/* Rank On — which summary figure decides the Rank column / row order.
-   Defaults to FY TOTAL. */
-const RANK_ON_OPTIONS = ["allTimeTotal", "fyTotal"];
-const RANK_ON_LABELS = {
-  allTimeTotal: "GRAND TOTAL",
-  fyTotal: "FY TOTAL",
-};
-const DEFAULT_RANK_ON = "fyTotal";
-
 const LAKH = 100000;
 
 /* ---------------- reusable multi-select dropdown (checkboxes) ---------------- */
@@ -214,10 +205,6 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   const [specialFrom, setSpecialFrom] = useState(""); // lakhs, for between
   const [specialTo, setSpecialTo] = useState(""); // lakhs, for between
 
-  /* Rank On — decides which figure (Grand Total or FY Total) the Rank
-     column / row order is based on. Defaults to FY Total. */
-  const [rankOn, setRankOn] = useState(DEFAULT_RANK_ON);
-
   /* default the FY filter to the current financial year, once, as soon as
      the data actually contains it — mirrors the Customer Wise page's default */
   const didInitFy = useRef(false);
@@ -323,9 +310,8 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   }, [rows]);
 
   /* merge grid pivot + stats into the final per-salesman rows, then RANK
-     them by the figure chosen in "Rank On" (defaults to FY TOTAL, can be
-     switched to GRAND TOTAL) — rank 1 = highest, rank 2 = next highest,
-     and so on — and sort the rows in that same ascending-rank order */
+     them by FY TOTAL — rank 1 = highest, rank 2 = next highest, and so on —
+     and sort the rows in that same ascending-rank order */
   const salesmen = useMemo(() => {
     const list = [...salesmenBase.values()].map((s) => {
       const stats = statsByName.get(s.name) || {
@@ -333,12 +319,12 @@ export default function SalesmanWise({ rows = [], loading = false }) {
       };
       return { ...s, ...stats };
     });
-    list.sort((a, b) => (b[rankOn] || 0) - (a[rankOn] || 0));
+    list.sort((a, b) => (b.fyTotal || 0) - (a.fyTotal || 0));
     list.forEach((s, i) => {
       s.rank = i + 1;
     });
     return list;
-  }, [salesmenBase, statsByName, rankOn]);
+  }, [salesmenBase, statsByName]);
 
   /* the month columns the Green/Yellow half of Color Wise checks */
   const scopedMonths = useMemo(() => {
@@ -454,9 +440,8 @@ export default function SalesmanWise({ rows = [], loading = false }) {
   );
   const recentMonths = useMemo(() => new Set(monthCols.slice(0, 3)), [monthCols]);
 
-  /* summary columns: just GRAND TOTAL and FY TOTAL */
+  /* summary columns: just FY TOTAL */
   const summaryCols = [
-    { key: "allTimeTotal", label: "GRAND TOTAL" },
     { key: "fyTotal", label: "FY TOTAL" },
   ];
 
@@ -531,7 +516,6 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     query, pageSize, rows.length, colorFilter, colorScope, redScope,
     fyFilter, salesSelected, monthSelected,
     specialOp, specialValue, specialFrom, specialTo,
-    rankOn,
   ]);
 
   const grandTotal = useMemo(
@@ -546,8 +530,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     fyFilter.length > 0 ||
     specialActive ||
     !scopeIsDefault ||
-    !redScopeIsDefault ||
-    rankOn !== DEFAULT_RANK_ON;
+    !redScopeIsDefault;
 
   const clearAllFilters = () => {
     setColorFilter([]);
@@ -560,7 +543,6 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     setSpecialValue("");
     setSpecialFrom("");
     setSpecialTo("");
-    setRankOn(DEFAULT_RANK_ON);
   };
 
   return (
@@ -767,32 +749,13 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
         <span className="text-[11px] text-slate-400">on FY TOTAL</span>
 
-        {/* Rank On — chooses whether the Rank column / row order is based
-            on Grand Total or FY Total (default) */}
-        <span className="flex items-center gap-1.5">
-          <span className="text-[11px] text-slate-400">Rank On</span>
-          <select
-            value={rankOn}
-            onChange={(e) => setRankOn(e.target.value)}
-            title="Rank salesmen by this figure"
-            className="cursor-pointer rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 outline-none focus:border-orange-400"
-          >
-            {RANK_ON_OPTIONS.map((key) => (
-              <option key={key} value={key}>
-                {RANK_ON_LABELS[key]}
-              </option>
-            ))}
-          </select>
-        </span>
-
-        {(specialOp || specialValue || specialFrom || specialTo || rankOn !== DEFAULT_RANK_ON) && (
+        {(specialOp || specialValue || specialFrom || specialTo) && (
           <button
             onClick={() => {
               setSpecialOp("");
               setSpecialValue("");
               setSpecialFrom("");
               setSpecialTo("");
-              setRankOn(DEFAULT_RANK_ON);
             }}
             className="text-[11px] font-medium text-orange-600 hover:text-orange-700"
           >
