@@ -66,7 +66,7 @@ export default function Home() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l6-6 4 4 8-8M21 7v6h-6" />
           </svg>
         </div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900">Sale Manager</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900">ALFA SALE SYSTEM</h1>
         <p className="mt-2 text-sm text-slate-500">
           {user?.name ? `Welcome back, ${user.name} — ` : ""}pick a module to get started.
         </p>

@@ -252,22 +252,23 @@ export default function SalesmanWise({ rows = [], loading = false }) {
     return map;
   }, [gridRows]);
 
-  /* summary stats — GRAND TOTAL (sum of all sales, all-time) and FY TOTAL
-     (sum of sales in the CURRENT financial year, regardless of the FY
-     filter above) plus the coloring baseline (average) — all computed
-     from the FULL, un-FY-filtered data, since none of these should move
-     with the FY filter */
+  /* summary stats — FY TOTAL (sum of sales in the SELECTED financial
+     year(s); falls back to the CURRENT FY when no FY filter is chosen)
+     plus the coloring baseline (average) — the baseline is computed from
+     the FULL, un-FY-filtered data (unaffected by the FY filter), but
+     FY TOTAL itself follows whichever FY(s) are selected above */
   const statsByName = useMemo(() => {
     const monthSums = new Map(); // name -> Map(month_year -> sum)
     const allTimeTotals = new Map(); // name -> sum of every sale, ever
-    const fyTotals = new Map(); // name -> sum of sales in the CURRENT FY only
+    const fyTotals = new Map(); // name -> sum of sales in the SELECTED FY(s)
     const currentFy = fyOfDate(new Date());
+    const targetFys = fyFilter.length ? fyFilter : [currentFy];
 
     for (const r of rows) {
       const name = (r.salesman_name || "Unassigned").trim();
       const amt = Number(r.debit) || 0;
       allTimeTotals.set(name, (allTimeTotals.get(name) || 0) + amt);
-      if (r.fy === currentFy) {
+      if (targetFys.includes(r.fy)) {
         fyTotals.set(name, (fyTotals.get(name) || 0) + amt);
       }
       if (!r.month_year) continue;
@@ -307,7 +308,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
       });
     }
     return map;
-  }, [rows]);
+  }, [rows, fyFilter]);
 
   /* merge grid pivot + stats into the final per-salesman rows, then RANK
      them by FY TOTAL — rank 1 = highest, rank 2 = next highest, and so on —
@@ -447,7 +448,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
   /* export the currently filtered table (the FULL filtered set, every
      page — not just the page on screen): Rank + Salesman Name + every
-     visible month column + the 2 summary columns, in the same
+     visible month column + the summary column, in the same
      left-to-right order as the table itself. Downloads as .xlsx or .pdf
      depending on the "type" dropdown next to the Export button. */
   const handleExport = () => {
@@ -491,7 +492,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
 
   /* grand-total row totals — summed across the FULL filtered set (every
      page, not just the one currently shown), for each visible month
-     column and each of the 2 summary columns */
+     column and the summary column */
   const grandTotalsRow = useMemo(() => {
     const monthTotals = {};
     for (const my of visibleMonths) {
@@ -817,8 +818,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
                     className="group border-b border-slate-100 transition-colors hover:bg-orange-50/50"
                   >
                     {/* frozen salesman cell — rank is fixed to the salesman
-                        (by whichever figure "Rank On" selects), not to its
-                        position on the page */}
+                        (ranked by FY TOTAL), not to its position on the page */}
                     <td
                       className="sticky left-0 z-10 w-[200px] min-w-[200px] max-w-[200px] border-r border-slate-200 bg-white px-3 py-2 shadow-[2px_0_4px_rgba(15,23,42,0.06)] group-hover:bg-orange-50"
                       title={s.name}
@@ -865,7 +865,7 @@ export default function SalesmanWise({ rows = [], loading = false }) {
             )}
 
             {/* grand total row — sums the full filtered set (all pages, not
-                just the current one), colored like the GRAND TOTAL column */}
+                just the current one), colored like the summary column */}
             {!loading && filtered.length > 0 && (
               <tr className="border-t-2 border-amber-200 bg-amber-50/70">
                 {/* frozen label cell */}

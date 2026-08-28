@@ -104,7 +104,7 @@ export default function LoginPage() {
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/30">
               <TrendIcon className="h-6 w-6" />
             </span>
-            <span className="text-lg font-bold tracking-tight">Sales Manager</span>
+            <span className="text-lg font-bold tracking-tight">ALFA SALE SYSTEM</span>
           </div>
 
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-5xl">

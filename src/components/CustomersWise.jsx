@@ -83,10 +83,10 @@ const SCOPE_COL = { current: 0, previous: 1, third: 2 };
 /* the four trailing-month summary columns — each is the MAXIMUM of any
    single month's total debit within its range (not a sum), relative to
    today, EXCLUDING the current (in-progress) month:
-     Last 4 Month : month -1 .. month -5
-     5-8 Month    : month -6 .. month -9
-     9-12 Month   : month -10 .. month -13
-     Last 1 Year  : month -1 .. month -13
+     Last 4 Month : month -1 .. month -4
+     5-8 Month    : month -5 .. month -8
+     9-12 Month   : month -9 .. month -12
+     Last 1 Year  : month -1 .. month -12
    (the underlying "baseline" used for the latest-3-months color coding is
    a separate, unaffected average — see statsByName below) */
 const SPECIAL_COL_OPTIONS = ["lastYear", "last4", "m5to8", "m9to12"];
@@ -236,7 +236,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
   /* Special Filter — number filter on the 4 trailing-month summary columns.
      "Apply On" defaults to Last 1 Year; the filter itself only activates
      once an Operation + value are also chosen. */
-  const [specialOp, setSpecialOp] = useState(""); // "" | "more" | "less" | "equal" | "between"
+  const [specialOp, setSpecialOp] = useState("more"); // "" | "more" | "less" | "equal" | "between" — defaults to "More Than"
   const [specialCols, setSpecialCols] = useState(["lastYear"]); // subset of SPECIAL_COL_OPTIONS
   const [specialValue, setSpecialValue] = useState(""); // lakhs, for more/less/equal
   const [specialFrom, setSpecialFrom] = useState(""); // lakhs, for between
@@ -353,10 +353,10 @@ export default function CustomersWise({ rows = [], loading = false }) {
         const diff = nowIdx - idx; // 1 = last month, 2 = two months ago, …
 
         // the four displayed columns — maximum single month within range
-        if (diff >= 1 && diff <= 13) lastYear = Math.max(lastYear, sum);
-        if (diff >= 1 && diff <= 5) last4 = Math.max(last4, sum);
-        if (diff >= 6 && diff <= 9) m5to8 = Math.max(m5to8, sum);
-        if (diff >= 10 && diff <= 13) m9to12 = Math.max(m9to12, sum);
+        if (diff >= 1 && diff <= 12) lastYear = Math.max(lastYear, sum);
+        if (diff >= 1 && diff <= 4) last4 = Math.max(last4, sum);
+        if (diff >= 5 && diff <= 8) m5to8 = Math.max(m5to8, sum);
+        if (diff >= 9 && diff <= 12) m9to12 = Math.max(m9to12, sum);
 
         // baseline for the latest-3-months color coding stays an AVERAGE
         // over the trailing 12 months — untouched by the max-column change
@@ -618,7 +618,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
     setFyFilter([]);
     setCustSelected([]);
     setMonthSelected([]);
-    setSpecialOp("");
+    setSpecialOp("more");
     setSpecialCols([]);
     setSpecialValue("");
     setSpecialFrom("");
@@ -889,10 +889,10 @@ export default function CustomersWise({ rows = [], loading = false }) {
           </select>
         </span>
 
-        {(specialOp || specialCols.length > 0 || specialValue || specialFrom || specialTo || rankOn !== DEFAULT_RANK_ON) && (
+        {(specialCols.length > 0 || specialValue || specialFrom || specialTo || rankOn !== DEFAULT_RANK_ON) && (
           <button
             onClick={() => {
-              setSpecialOp("");
+              setSpecialOp("more");
               setSpecialCols([]);
               setSpecialValue("");
               setSpecialFrom("");
