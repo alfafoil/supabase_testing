@@ -540,7 +540,7 @@ export default function SalersReport() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l6-6 4 4 8-8M21 7v6h-6" />
             </svg>
           </span>
-          <span className="text-sm font-semibold tracking-tight">Sale Manager</span>
+          <span className="text-sm font-semibold tracking-tight">ALFA SALE SYSTEM</span>
         </div>
 
         <div className="flex items-center gap-1.5">
