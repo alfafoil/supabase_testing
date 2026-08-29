@@ -592,7 +592,7 @@ export default function SalersReport() {
             </svg>
           </span>
           {sidebarOpen && (
-            <span className="truncate text-lg font-semibold tracking-tight">Sale Manager</span>
+            <span className="truncate text-lg font-semibold tracking-tight">ALFA SALE SYSTEM</span>
           )}
         </div>
 
