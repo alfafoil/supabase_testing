@@ -304,7 +304,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   /* pivot: one row per customer (particulars), one cell per month —
      built from gridRows so Salesman/FY narrow the grid itself; also
-     tracks the set of salesmen who sold to this customer, for export */
+     tracks the set of salesmen who sold to this customer, for export.
+     "total" here is the sum over gridRows, i.e. it already respects both
+     the Salesman filter AND the FY filter — this is what "PY TOTAL"
+     below is built from, so selecting one or more FYs in the FY dropdown
+     sums exactly those FY(s) into PY TOTAL. */
   const customersBase = useMemo(() => {
     const map = new Map();
     for (const r of gridRows) {
@@ -379,7 +383,8 @@ export default function CustomersWise({ rows = [], loading = false }) {
      them by the figure chosen in "Rank On" (defaults to LAST 1 YEAR, can
      be switched to GRAND TOTAL) — rank 1 = highest, rank 2 = next
      highest, and so on — and sort the rows in that same ascending-rank
-     order */
+     order. Each entry keeps "total" (from customersBase, i.e. the FY-
+     filtered grid total) as-is — that's what PY TOTAL displays. */
   const customers = useMemo(() => {
     const list = [...customersBase.values()].map((c) => {
       const s = statsByName.get(c.name) || {
@@ -544,9 +549,17 @@ export default function CustomersWise({ rows = [], loading = false }) {
   );
 
   /* summary column order, as displayed and exported:
-     GRAND TOTAL, Last 4 Month, 5-8 Month, 9-12 Month, Last 1 Year */
+     GRAND TOTAL, PY TOTAL, Last 4 Month, 5-8 Month, 9-12 Month, Last 1 Year
+
+     PY TOTAL = the sum of debit for whichever financial year(s) are
+     currently checked in the "FY" dropdown (fyFilter) — it reuses "total"
+     from customersBase, which is already built from gridRows (Salesman +
+     FY filtered). Selecting more than one FY there sums all of them
+     together into this one column; leaving FY unselected sums every FY
+     (all-time), same as no FY filter being applied to the grid. */
   const summaryCols = [
     { key: "allTimeTotal", label: "GRAND TOTAL" },
+    { key: "total", label: "PY TOTAL" },
     { key: "last4", label: "Last 4 Month" },
     { key: "m5to8", label: "5-8 Month" },
     { key: "m9to12", label: "9-12 Month" },
