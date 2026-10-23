@@ -106,10 +106,12 @@ const OPERATION_OPTIONS = [
 
 /* Rank On — which summary figure decides the Rank column / row order.
    Defaults to LAST 1 YEAR, matching the existing behavior. */
-const RANK_ON_OPTIONS = ["lastYear", "allTimeTotal"];
+const RANK_ON_OPTIONS = ["total", "yyTotal", "allTimeTotal", "lastYear"];
 const RANK_ON_LABELS = {
-  lastYear: "LAST 1 YEAR",
+  total: "FY TOTAL",
+  yyTotal: "YY TOTAL",
   allTimeTotal: "GRAND TOTAL",
+  lastYear: "LAST 1 YEAR",
 };
 const DEFAULT_RANK_ON = "lastYear";
 
@@ -306,9 +308,9 @@ export default function CustomersWise({ rows = [], loading = false }) {
      built from gridRows so Salesman/FY narrow the grid itself; also
      tracks the set of salesmen who sold to this customer, for export.
      "total" here is the sum over gridRows, i.e. it already respects both
-     the Salesman filter AND the FY filter — this is what "PY TOTAL"
+     the Salesman filter AND the FY filter — this is what "FY TOTAL"
      below is built from, so selecting one or more FYs in the FY dropdown
-     sums exactly those FY(s) into PY TOTAL. */
+     sums exactly those FY(s) into FY TOTAL. */
   const customersBase = useMemo(() => {
     const map = new Map();
     for (const r of gridRows) {
@@ -323,10 +325,10 @@ export default function CustomersWise({ rows = [], loading = false }) {
     return map;
   }, [gridRows]);
 
-  /* summary stats (GRAND TOTAL / Last 1 Year / Last 4 Month / 5-8 / 9-12 +
-     baseline), always relative to today, from statsRows — deliberately
-     independent of the FY filter (and of which months happen to be on
-     screen) */
+  /* summary stats (GRAND TOTAL / Last 1 Year / Last 4 Month / 5-8 / 9-12 /
+     YY TOTAL + baseline), always relative to today, from statsRows —
+     deliberately independent of the FY filter (and of which months happen
+     to be on screen) */
   const statsByName = useMemo(() => {
     // step 1: per-customer, per-month totals (a customer can have several
     // rows landing in the same month) — the four trailing-month summary
@@ -346,7 +348,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
     const map = new Map();
     for (const [name, monthMap] of monthSums.entries()) {
-      let last4 = 0, m5to8 = 0, m9to12 = 0, lastYear = 0, allTimeTotal = 0;
+      let last4 = 0, m5to8 = 0, m9to12 = 0, lastYear = 0, allTimeTotal = 0, yyTotal = 0;
       let baselineSum = 0, baselineCnt = 0; // separate, unaffected average — see below
 
       for (const [my, sum] of monthMap.entries()) {
@@ -362,6 +364,12 @@ export default function CustomersWise({ rows = [], loading = false }) {
         if (diff >= 5 && diff <= 8) m5to8 = Math.max(m5to8, sum);
         if (diff >= 9 && diff <= 12) m9to12 = Math.max(m9to12, sum);
 
+        // YY TOTAL — the SUM of every month from month -1 to month -12
+        // (the same window as Last 1 Year), vs. Last 1 Year's MAX single
+        // month in that same window — so YY TOTAL is the true trailing-
+        // 12-month sales total, always relative to today
+        if (diff >= 1 && diff <= 12) yyTotal += sum;
+
         // baseline for the latest-3-months color coding stays an AVERAGE
         // over the trailing 12 months — untouched by the max-column change
         if (diff >= 1 && diff <= 12) {
@@ -372,7 +380,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
       const avg = baselineCnt ? baselineSum / baselineCnt : 0;
       map.set(name, {
-        last4, m5to8, m9to12, lastYear, allTimeTotal,
+        last4, m5to8, m9to12, lastYear, allTimeTotal, yyTotal,
         baseline: avg === 0 ? 1 : avg,
       });
     }
@@ -381,14 +389,15 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   /* merge grid pivot + stats into the final per-customer rows, then RANK
      them by the figure chosen in "Rank On" (defaults to LAST 1 YEAR, can
-     be switched to GRAND TOTAL) — rank 1 = highest, rank 2 = next
-     highest, and so on — and sort the rows in that same ascending-rank
-     order. Each entry keeps "total" (from customersBase, i.e. the FY-
-     filtered grid total) as-is — that's what PY TOTAL displays. */
+     be switched to FY TOTAL / YY TOTAL / GRAND TOTAL) — rank 1 = highest,
+     rank 2 = next highest, and so on — and sort the rows in that same
+     ascending-rank order. Each entry keeps "total" (from customersBase,
+     i.e. the FY-filtered grid total) as-is — that's what FY TOTAL
+     displays. */
   const customers = useMemo(() => {
     const list = [...customersBase.values()].map((c) => {
       const s = statsByName.get(c.name) || {
-        last4: 0, m5to8: 0, m9to12: 0, lastYear: 0, allTimeTotal: 0, baseline: 1,
+        last4: 0, m5to8: 0, m9to12: 0, lastYear: 0, allTimeTotal: 0, yyTotal: 0, baseline: 1,
       };
       return {
         ...c,
@@ -397,6 +406,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
         m9to12: s.m9to12,
         lastYear: s.lastYear,
         allTimeTotal: s.allTimeTotal,
+        yyTotal: s.yyTotal,
         baseline: s.baseline,
       };
     });
@@ -549,17 +559,26 @@ export default function CustomersWise({ rows = [], loading = false }) {
   );
 
   /* summary column order, as displayed and exported:
-     GRAND TOTAL, PY TOTAL, Last 4 Month, 5-8 Month, 9-12 Month, Last 1 Year
+     GRAND TOTAL, FY TOTAL, YY TOTAL, Last 4 Month, 5-8 Month, 9-12 Month,
+     Last 1 Year
 
-     PY TOTAL = the sum of debit for whichever financial year(s) are
+     FY TOTAL = the sum of debit for whichever financial year(s) are
      currently checked in the "FY" dropdown (fyFilter) — it reuses "total"
      from customersBase, which is already built from gridRows (Salesman +
      FY filtered). Selecting more than one FY there sums all of them
      together into this one column; leaving FY unselected sums every FY
-     (all-time), same as no FY filter being applied to the grid. */
+     (all-time), same as no FY filter being applied to the grid.
+
+     YY TOTAL = the SUM of every month from month -1 to month -12 (the
+     exact same trailing-12-month window as Last 1 Year) — where Last 1
+     Year shows the MAX single month in that window, YY TOTAL shows the
+     true total across all 12 of them. Always relative to today; unaffected
+     by the FY filter (same convention as Last 1 Year / 4 Month / 5-8 /
+     9-12). */
   const summaryCols = [
     { key: "allTimeTotal", label: "GRAND TOTAL" },
-    { key: "total", label: "PY TOTAL" },
+    { key: "total", label: "FY TOTAL" },
+    { key: "yyTotal", label: "YY TOTAL" },
     { key: "last4", label: "Last 4 Month" },
     { key: "m5to8", label: "5-8 Month" },
     { key: "m9to12", label: "9-12 Month" },
@@ -884,8 +903,8 @@ export default function CustomersWise({ rows = [], loading = false }) {
           emptyText="Choose columns"
         />
 
-        {/* Rank On — chooses whether the Rank column / row order is based
-            on Last 1 Year (default) or Grand Total */}
+        {/* Rank On — chooses which figure the Rank column / row order is
+            based on (FY TOTAL / YY TOTAL / GRAND TOTAL / LAST 1 YEAR) */}
         <span className="flex items-center gap-1.5">
           <span className="text-[11px] text-slate-400">Rank On</span>
           <select
