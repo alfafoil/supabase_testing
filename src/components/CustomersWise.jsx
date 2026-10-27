@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import CustomerInfoCard from "./CustomerInfoCard";
 
 /* ---------------- constants / helpers ---------------- */
 
@@ -221,6 +222,9 @@ export default function CustomersWise({ rows = [], loading = false }) {
   const [page, setPage] = useState(1);
   const [exportType, setExportType] = useState("excel"); // "excel" | "pdf" — default Excel
   const [pageSize, setPageSize] = useState(25); // default 25 per page
+
+  /* "i" button -> Additional Information card: which customer's card is open */
+  const [infoCustomer, setInfoCustomer] = useState(null);
 
   /* filters */
   const [colorFilter, setColorFilter] = useState([]); // [] = all colors (Green/Yellow/Blue only)
@@ -1001,6 +1005,16 @@ export default function CustomersWise({ rows = [], loading = false }) {
                         <span className="w-7 shrink-0 text-center font-mono text-[10px] text-slate-400">
                           {c.rank}
                         </span>
+
+                        {/* "i" button — opens the Additional Information card */}
+                        <button
+                          onClick={() => setInfoCustomer(c.name)}
+                          title="Additional Information"
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-blue-300 bg-blue-50 text-[10px] font-bold italic leading-none text-blue-600 transition-colors hover:bg-blue-500 hover:text-white"
+                        >
+                          i
+                        </button>
+
                         <span className="truncate font-medium text-slate-700">{c.name}</span>
                       </div>
                     </td>
@@ -1090,6 +1104,11 @@ export default function CustomersWise({ rows = [], loading = false }) {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Additional Information card */}
+      {infoCustomer && (
+        <CustomerInfoCard customerName={infoCustomer} onClose={() => setInfoCustomer(null)} />
       )}
     </motion.div>
   );
