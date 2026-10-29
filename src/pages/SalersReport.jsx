@@ -310,24 +310,27 @@ export default function SalersReport() {
   const [page, setPage] = useState(1);
   const [exportType, setExportType] = useState("excel"); // "excel" | "pdf" — default Excel
 
-  /* fetch once + apply default filters (current FY / current month) */
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const { data, error } = await fetchSalesReport();
-      if (error) setErrorMsg(error.message || "Failed to fetch sales report.");
-      const list = (data || []).map((r) => ({ ...r, _d: parseDate(r.date) }));
-      setRows(list);
+  /* fetch rows. silent = refresh in the background (no loading state, filters untouched) */
+  const loadRows = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
+    const { data, error } = await fetchSalesReport();
+    if (error) setErrorMsg(error.message || "Failed to fetch sales report.");
+    const list = (data || []).map((r) => ({ ...r, _d: parseDate(r.date) }));
+    setRows(list);
 
-      // default filters — only applied when the data actually contains them
+    // default filters (current FY / current month) — first load only, never on a silent refresh
+    if (!silent) {
       const nowD = new Date();
       const defFy = currentFy(nowD);
       const defMonth = currentMonthYear(nowD);
       if (list.some((r) => r.fy === defFy)) setFy(defFy);
       if (list.some((r) => r.month_year === defMonth)) setMonth(defMonth);
-
       setLoading(false);
-    })();
+    }
+  };
+
+  useEffect(() => {
+    loadRows();
   }, []);
 
   const now = useMemo(() => new Date(), []);
@@ -380,12 +383,12 @@ export default function SalersReport() {
         return false;
       return true;
     });
-    // Date — descending; rows with unparseable/missing dates sink to the bottom
-    return list.sort((a, b) => {
-      const bt = b._d ? b._d.getTime() : -Infinity;
-      const at = a._d ? a._d.getTime() : -Infinity;
-      return bt - at;
-    });
+    // Vch No — descending (numeric-aware)
+    return list.sort((a, b) =>
+      String(b.vch_no ?? "").localeCompare(String(a.vch_no ?? ""), undefined, {
+        numeric: true,
+      })
+    );
   }, [rows, kpiFilter, salesman, fy, month, customers, now]);
 
   /* reset pagination whenever the result set changes */
@@ -540,7 +543,7 @@ export default function SalersReport() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l6-6 4 4 8-8M21 7v6h-6" />
             </svg>
           </span>
-          <span className="text-sm font-semibold tracking-tight">ALFA SALE SYSTEM</span>
+          <span className="text-sm font-semibold tracking-tight">Sale Manager</span>
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -592,7 +595,7 @@ export default function SalersReport() {
             </svg>
           </span>
           {sidebarOpen && (
-            <span className="truncate text-lg font-semibold tracking-tight">ALFA SALE SYSTEM</span>
+            <span className="truncate text-lg font-semibold tracking-tight">Sale Manager</span>
           )}
         </div>
 
@@ -731,7 +734,7 @@ export default function SalersReport() {
         {view === "customers" ? (
           /* ---------- Customer Wise view ---------- */
           <div className="mt-4">
-            <CustomersWise rows={rows} loading={loading} />
+            <CustomersWise rows={rows} loading={loading} onRefresh={() => loadRows({ silent: true })} />
           </div>
         ) : view === "salesman" ? (
           /* ---------- Salesman Wise view ---------- */

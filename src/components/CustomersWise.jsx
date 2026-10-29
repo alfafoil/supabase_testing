@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import CustomerInfoCard from "./CustomerInfoCard";
+import { fetchMdFollowupLists, nameKey } from "../supabase/mdFollowupSummary";
 
 /* ---------------- constants / helpers ---------------- */
 
@@ -217,7 +218,7 @@ function MultiSelectDropdown({ label, options, selected, onToggle, onClear, sear
  *  - rows    : array from fetchSalesReport() -> { particulars, debit, month_year, salesman_name, fy, ... }
  *  - loading : boolean (optional)
  */
-export default function CustomersWise({ rows = [], loading = false }) {
+export default function CustomersWise({ rows = [], loading = false, onRefresh }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [exportType, setExportType] = useState("excel"); // "excel" | "pdf" — default Excel
@@ -225,6 +226,36 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
   /* "i" button -> Additional Information card: which customer's card is open */
   const [infoCustomer, setInfoCustomer] = useState(null);
+
+  /* the two quick filters "Today's Followup" and "Client Followed By Me":
+     each list = { count, names } read from sales_inqury_master (names = company names) */
+  const [mdLists, setMdLists] = useState({
+    followed: { count: 0, names: new Set() },
+    today: { count: 0, names: new Set() },
+    missed: { count: 0, names: new Set() },
+  });
+  const [mdReload, setMdReload] = useState(0); // bump to re-fetch after the card saves / unfollows
+  const [todayOnly, setTodayOnly] = useState(false);
+  const [mineOnly, setMineOnly] = useState(false);
+  const [missedOnly, setMissedOnly] = useState(false);
+  const [mdError, setMdError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMdFollowupLists()
+      .then((lists) => {
+        if (cancelled) return;
+        setMdLists(lists);
+        setMdError("");
+      })
+      .catch((err) => {
+        console.error("MD followup summary failed:", err);
+        if (!cancelled) setMdError(err?.message || "request failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mdReload]);
 
   /* filters */
   const [colorFilter, setColorFilter] = useState([]); // [] = all colors (Green/Yellow/Blue only)
@@ -421,6 +452,26 @@ export default function CustomersWise({ rows = [], loading = false }) {
     return list;
   }, [customersBase, statsByName, rankOn]);
 
+  /* counts shown next to the legend (client counts from sales_inqury_master):
+       Today's Followup        = clients whose md_next_followup_date is today
+       Client Followed By Me   = clients whose md_followup_by is not empty */
+  const followupCounts = { today: mdLists.today.count, mine: mdLists.followed.count, missed: mdLists.missed.count };
+
+  /* debugging aid: company names from those lists that are not in this table
+     (no sales in the selected FY / salesman, or a different spelling) */
+  useEffect(() => {
+    const inTable = new Set(customers.map((c) => nameKey(c.name)));
+    const missing = (list) => [...list.names].filter((n) => !inTable.has(n));
+    const mine = missing(mdLists.followed);
+    const today = missing(mdLists.today);
+    if (!mdLists.followed.count && !mdLists.today.count) return;
+    console.info(
+      `[MD followup] followed: ${mdLists.followed.count} clients (${mine.length} not in table), ` +
+        `today: ${mdLists.today.count} clients (${today.length} not in table)`,
+      { notInTable: { followed: mine, today } }
+    );
+  }, [mdLists, customers]);
+
   /* the month columns the Color Wise filter checks, from the scope dropdown
      (current -> 1st column, previous -> 2nd, third -> 3rd);
      if the user unchecks everything, fall back to the current month */
@@ -489,12 +540,19 @@ export default function CustomersWise({ rows = [], loading = false }) {
         if (!allBlank) return false;
       }
       if (custSelected.length && !custSelected.includes(c.name)) return false;
+      // quick filters from the legend row (both can be on together)
+      if (todayOnly || mineOnly || missedOnly) {
+        const key = nameKey(c.name);
+        if (todayOnly && !mdLists.today.names.has(key)) return false;
+        if (mineOnly && !mdLists.followed.names.has(key)) return false;
+        if (missedOnly && !mdLists.missed.names.has(key)) return false;
+      }
       // Special Filter can be combined with Color Wise — both apply together
       if (!passesSpecial(c)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, query, colorFilter, custSelected, scopedMonths, redFilter, redScopedMonths, specialActive, specialOp, specialCols, specialValue, specialFrom, specialTo]);
+  }, [customers, query, colorFilter, custSelected, scopedMonths, redFilter, redScopedMonths, specialActive, specialOp, specialCols, specialValue, specialFrom, specialTo, todayOnly, mineOnly, missedOnly, mdLists]);
 
   const toggleColor = (key) =>
     setColorFilter((cur) =>
@@ -554,7 +612,7 @@ export default function CustomersWise({ rows = [], loading = false }) {
     salesmanFilter, fyFilter, custSelected, monthSelected,
     redFilter, redScope,
     specialOp, specialCols, specialValue, specialFrom, specialTo,
-    rankOn,
+    rankOn, todayOnly, mineOnly, missedOnly,
   ]);
 
   const grandTotal = useMemo(
@@ -645,7 +703,10 @@ export default function CustomersWise({ rows = [], loading = false }) {
     !scopeIsDefault ||
     rankOn !== DEFAULT_RANK_ON ||
     redFilter ||
-    !redScopeIsDefault;
+    !redScopeIsDefault ||
+    todayOnly ||
+    mineOnly ||
+    missedOnly;
 
   const clearAllFilters = () => {
     setColorFilter([]);
@@ -662,6 +723,9 @@ export default function CustomersWise({ rows = [], loading = false }) {
     setRankOn(DEFAULT_RANK_ON);
     setRedFilter(false);
     setRedScope(DEFAULT_SCOPE);
+    setTodayOnly(false);
+    setMineOnly(false);
+    setMissedOnly(false);
   };
 
   return (
@@ -733,6 +797,60 @@ export default function CustomersWise({ rows = [], loading = false }) {
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm bg-rose-200" /> no sale
         </span>
+
+        {/* MD followup quick filters — click to filter the table, click again to clear */}
+        <span className="mx-1 hidden h-4 w-px bg-slate-200 sm:inline-block" />
+        {[
+          {
+            key: "today",
+            label: "Today's Followup",
+            title: "Clients whose MD next followup date is today",
+            count: followupCounts.today,
+            active: todayOnly,
+            toggle: () => setTodayOnly((v) => !v),
+          },
+          {
+            key: "mine",
+            label: "Client Followed By Me",
+            title: "Clients that have an MD Followed By name",
+            count: followupCounts.mine,
+            active: mineOnly,
+            toggle: () => setMineOnly((v) => !v),
+          },
+          {
+            key: "missed",
+            label: "Missed Followup",
+            title: "Clients whose MD next followup date is before today",
+            count: followupCounts.missed,
+            active: missedOnly,
+            toggle: () => setMissedOnly((v) => !v),
+          },
+        ].map((f) => (
+          <button
+            key={f.key}
+            onClick={f.toggle}
+            title={f.title}
+            className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all ${
+              f.active
+                ? "border-slate-700 bg-slate-800 text-white shadow"
+                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+            }`}
+          >
+            {f.label}
+            <span
+              className={`rounded-full px-1.5 text-[10px] font-bold ${
+                f.active ? "bg-white text-slate-800" : "bg-orange-500 text-white"
+              }`}
+            >
+              {f.count}
+            </span>
+          </button>
+        ))}
+        {mdError && (
+          <span className="max-w-xs truncate text-[11px] text-rose-500" title={mdError}>
+            Followup counts unavailable: {mdError}
+          </span>
+        )}
       </div>
 
       {/* filter row: color-wise + its month scope + the dedicated Red (no
@@ -1108,7 +1226,14 @@ export default function CustomersWise({ rows = [], loading = false }) {
 
       {/* Additional Information card */}
       {infoCustomer && (
-        <CustomerInfoCard customerName={infoCustomer} onClose={() => setInfoCustomer(null)} />
+        <CustomerInfoCard
+          customerName={infoCustomer}
+          onClose={() => setInfoCustomer(null)}
+          onChanged={() => {
+            setMdReload((k) => k + 1); // followup counts re-fetch
+            onRefresh?.(); // page data refresh (filters stay)
+          }}
+        />
       )}
     </motion.div>
   );
