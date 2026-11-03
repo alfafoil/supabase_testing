@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchCustomerInfo, parseDate } from "../supabase/customerInfo"; // <- adjust the path to match your project
+import { fetchCustomerMaster } from "../supabase/customerMaster";
 import MdFollowupCard from "./MdFollowupCard";
 import { unfollowMd } from "../supabase/mdFollowup";
 
@@ -53,6 +54,7 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
   const [remarks, setRemarks] = useState([]); // followup_remarks rows
   const [sales, setSales] = useState([]); // latest 10 from sales_report
   const [frequency, setFrequency] = useState(null); // avg orders per month
+  const [master, setMaster] = useState(null); // customer_master row (billing address + salesman name)
   const [mdOpen, setMdOpen] = useState(false); // is the MD Followup Card open?
   const [confirmOpen, setConfirmOpen] = useState(false); // is the Unfollow confirmation open?
   const [unfollowBusy, setUnfollowBusy] = useState(false);
@@ -84,6 +86,23 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
       cancelled = true;
     };
   }, [customerName, reloadKey]);
+
+  // customer_master lookup: customer_name = Company Name (billing address + salesman name)
+  useEffect(() => {
+    let cancelled = false;
+    const companyName = client?.company_name || customerName;
+    (async () => {
+      try {
+        const m = await fetchCustomerMaster(companyName);
+        if (!cancelled) setMaster(m);
+      } catch {
+        if (!cancelled) setMaster(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, customerName, reloadKey]);
 
   // close on Esc
   useEffect(() => {
@@ -235,6 +254,15 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
                         client.refrence_sheet
                       ))}
                   </Field>
+                </div>
+              </Section>
+
+              <Section title="Address & Other Details">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-2">
+                    <Field label="Billing Address">{master?.billing_address}</Field>
+                  </div>
+                  <Field label="Salesman Name">{master?.salesman_name?.toUpperCase()}</Field>
                 </div>
               </Section>
 
