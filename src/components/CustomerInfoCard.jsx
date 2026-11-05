@@ -53,7 +53,7 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
   const [client, setClient] = useState(null); // sales_inqury_master row
   const [remarks, setRemarks] = useState([]); // followup_remarks rows
   const [sales, setSales] = useState([]); // latest 10 from sales_report
-  const [frequency, setFrequency] = useState(null); // avg orders per month
+  const [salesInfo, setSalesInfo] = useState(null); // { latest, frequency } from sales_report
   const [master, setMaster] = useState(null); // customer_master row (billing address + salesman name)
   const [mdOpen, setMdOpen] = useState(false); // is the MD Followup Card open?
   const [confirmOpen, setConfirmOpen] = useState(false); // is the Unfollow confirmation open?
@@ -68,13 +68,13 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
       setError("");
       try {
         // all fetching lives in supabase/customerInfo.js
-        const { client: c, remarks: rem, sales: top10, frequency: freq } = await fetchCustomerInfo(customerName || "");
+        const { client: c, remarks: rem, sales: top10, salesInfo: info } = await fetchCustomerInfo(customerName || "");
 
         if (!cancelled) {
           setClient(c);
           setRemarks(rem);
           setSales(top10);
-          setFrequency(freq);
+          setSalesInfo(info);
         }
       } catch (err) {
         if (!cancelled) setError(err.message || "Something went wrong");
@@ -115,11 +115,11 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
     return () => window.removeEventListener("keydown", h);
   }, [onClose, mdOpen, confirmOpen]);
 
-  // Latest sale: use the master fields, fall back to the latest sales_report row
-  const latest = sales[0];
-  const latestDate = client?.latest_sale_date || latest?._d || null;
-  const latestInvoice = client?.latest_invoice_no || latest?.vch_no;
-  const latestValue = client?.latest_order_value ?? latest?.debit;
+  // Latest sale: comes from the sales_report table
+  const latestSale = salesInfo?.latest;
+  const latestDate = latestSale?._d || null;
+  const latestInvoice = latestSale?.vch_no;
+  const latestValue = latestSale?.debit;
 
   // MD followup details are columns of the client row in sales_inqury_master
   const mdInfo = client;
@@ -327,8 +327,8 @@ export default function CustomerInfoCard({ customerName, onClose, onChanged }) {
                   <Field label="Latest Invoice No.">{latestInvoice}</Field>
                   <Field label="Latest Order Value">{latestValue != null ? inr(latestValue) : ""}</Field>
                   <Field label="Frequency">
-                    {frequency?.count
-                      ? `${frequency.perMonth.toFixed(1)} orders / month (${frequency.count} in ${frequency.months} mo)`
+                    {salesInfo
+                      ? `${salesInfo.frequency} order${salesInfo.frequency > 1 ? "s" : ""} / month`
                       : ""}
                   </Field>
                 </div>

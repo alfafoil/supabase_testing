@@ -64,12 +64,54 @@ export async function fetchSalesHistory(customerName, limit = 10) {
     .slice(0, limit);
 }
 
+/**
+ * Sales Details for the card, all from sales_report:
+ *  - latest : newest sale row (date, invoice no., order value)
+ *  - frequency : unique invoices in the last 6 months / 6,
+ *                if the result is 0 or below 1 -> 1, otherwise rounded up to a whole number
+ * Returns { latest, frequency }
+ */
+export async function fetchSalesDetails(customerName) {
+  const { data, error } = await supabase
+    .from("sales_report")
+    .select("id,date,vch_no,debit")
+    .ilike("particulars", likeExact(customerName.trim()))
+    .gt("debit", 0);
+  if (error) throw error;
+
+  // date is text, so parse and filter in JS
+  const rows = (data || [])
+    .map((r) => ({ ...r, _d: parseDate(r.date) }))
+    .filter((r) => r._d && r.vch_no);
+
+  if (rows.length === 0) return { latest: null, frequency: 1 };
+
+  // latest sale = newest date (id breaks a tie on the same date)
+  const latest = rows.reduce(
+    (a, b) => (b._d > a._d || (b._d.getTime() === a._d.getTime() && b.id > a.id) ? b : a)
+  );
+
+  // last 6 months window
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+  // unique invoice numbers, so duplicate rows of one invoice are counted once
+  const invoiceCount = new Set(
+    rows.filter((r) => r._d >= sixMonthsAgo).map((r) => r.vch_no)
+  ).size;
+
+  const frequency = Math.max(1, Math.ceil(invoiceCount / 6));
+
+  return { latest, frequency };
+}
+
 /** everything the Additional Information card needs, in one call */
 export async function fetchCustomerInfo(customerName) {
   const client = await fetchInquiryClient(customerName);
-  const [remarks, sales] = await Promise.all([
+  const [remarks, sales, salesInfo] = await Promise.all([
     client ? fetchFollowupRemarks(client.id) : Promise.resolve([]),
     fetchSalesHistory(customerName),
+    fetchSalesDetails(customerName),
   ]);
-  return { client, remarks, sales };
+  return { client, remarks, sales, salesInfo };
 }
