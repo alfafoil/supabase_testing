@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import CustomerInfoCard from "./CustomerInfoCard";
-import { fetchMdFollowupLists, nameKey } from "../supabase/mdFollowupSummary";
+import { fetchMdFollowupLists, fetchFollowupDetails, nameKey } from "../supabase/mdFollowupSummary";
 
 /* ---------------- constants / helpers ---------------- */
 
@@ -42,6 +42,29 @@ const fyOfDate = (d) =>
 
 /** full Indian-format amount, no decimals */
 const inr0 = (n) => Math.round(Number(n) || 0).toLocaleString("en-IN");
+
+/* Possible date field names on the sales rows; the first one found is used */
+const SALE_DATE_FIELDS = ["date", "voucher_date", "sale_date", "txn_date"];
+
+const saleDateOf = (r) => {
+  for (const f of SALE_DATE_FIELDS) {
+    if (r[f]) {
+      const d = new Date(r[f]);
+      if (!isNaN(d)) return d;
+    }
+  }
+  return null;
+};
+
+/** any date value -> dd-mm-yyyy, or "—" when empty or invalid */
+const fmtDate = (v) => {
+  if (!v) return "—";
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d)) return String(v);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${d.getFullYear()}`;
+};
 
 /** the sheet's conditional-format rules -> a color name */
 const cellColor = (v, baseline) => {
@@ -620,7 +643,7 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
     [customers]
   );
 
-  /* summary column order, as displayed and exported:
+  /* summary column order, as displayed:
      GRAND TOTAL, FY TOTAL, YY TOTAL, Last 4 Month, 5-8 Month, 9-12 Month,
      Last 1 Year
 
@@ -648,48 +671,96 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
   ];
 
   /* export the currently filtered set (every page, not just the page on
-     screen) as just THREE columns: Rank, Customer Name, Salesman Name —
-     no month or summary columns. Rows are sorted by Salesman Name
-     (ascending), not by rank, so a customer's row lands next to the
-     salesman who covers them. Downloads as .xlsx or .pdf depending on
-     the "type" dropdown next to the Export button. */
-  const handleExport = () => {
+     screen) with these columns:
+       Rank, Customer Name, Salesman Name, Customer Address, Current Followup Date,
+       Next Followup Date, Followup By, Followup Remark, Latest Sale Date,
+       Latest Order Value
+     Rows keep exactly the order and Rank shown in the table (the "Rank On"
+     setting decides it) and only the filtered customers are exported.
+     Followup Remark holds every remark of the customer, newest on top.
+     Followup details are fetched from
+     sales_inqury_master once, at click time. Latest Sale Date / Latest Order
+     Value come from ALL sales rows (not narrowed by the FY filter).
+     Downloads as .xlsx or .pdf depending on the "type" dropdown next to the
+     Export button. */
+  const handleExport = async () => {
     if (!filtered.length) return;
 
-    const salesmanNameOf = (c) => [...c.salesmen].sort().join(", ") || "—";
+    try {
+      // followup details, fetched once at click time
+      const details = await fetchFollowupDetails();
 
-    const bySalesman = [...filtered].sort((a, b) =>
-      salesmanNameOf(a).localeCompare(salesmanNameOf(b))
-    );
+      // latest sale per customer, from ALL rows (not narrowed by the FY filter)
+      const latestSale = new Map(); // nameKey -> { time, date, value }
+      for (const r of rows) {
+        const d = saleDateOf(r);
+        if (!d) continue;
+        const key = nameKey(r.particulars);
+        const t = d.getTime();
+        const cur = latestSale.get(key);
+        if (!cur || t > cur.time) {
+          latestSale.set(key, { time: t, date: d, value: Number(r.debit) || 0 });
+        } else if (t === cur.time) {
+          cur.value += Number(r.debit) || 0; // several rows on the same latest date add up
+        }
+      }
 
-    const data = bySalesman.map((c) => ({
-      Rank: c.rank,
-      "Customer Name": c.name,
-      "Salesman Name": salesmanNameOf(c),
-    }));
-    const stamp = new Date().toISOString().slice(0, 10);
+      const salesmanNameOf = (c) => [...c.salesmen].sort().join(", ") || "—";
 
-    if (exportType === "pdf") {
-      const headers = Object.keys(data[0]);
-      const body = data.map((row) =>
-        headers.map((h) => (typeof row[h] === "number" ? inr0(row[h]) : row[h] || "—"))
-      );
-      const doc = new jsPDF({ orientation: "landscape" });
-      doc.setFontSize(12);
-      doc.text("Customer Wise Summary", 14, 10);
-      autoTable(doc, {
-        head: [headers],
-        body,
-        startY: 14,
-        styles: { fontSize: 7, cellPadding: 2 },
-        headStyles: { fillColor: [251, 191, 36], textColor: [120, 53, 15] }, // amber
+      // the export is built from `filtered`, the same list the table shows (all pages)
+      console.info(`[Export] exporting ${filtered.length} filtered customers`);
+
+      // same rows, same order and same Rank as the table (no re-sorting)
+      const data = filtered.map((c) => {
+        const key = nameKey(c.name);
+        const d = details.get(key) || {};
+        const sale = latestSale.get(key);
+        return {
+          Rank: c.rank,
+          "Customer Name": c.name,
+          "Salesman Name": salesmanNameOf(c),
+          "Customer Address": d.address || "—",
+          "Current Followup Date": fmtDate(d.currentFollowupDate),
+          "Next Followup Date": fmtDate(d.nextFollowupDate),
+          "Followup By": d.followupBy || "—",
+          "Followup Remark": d.followupRemark || "—",
+          "Latest Sale Date": sale ? fmtDate(sale.date) : "—",
+          "Latest Order Value": sale ? sale.value : "—",
+        };
       });
-      doc.save(`Customer_Wise_Summary_${stamp}.pdf`);
-    } else {
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Customer Wise");
-      XLSX.writeFile(wb, `Customer_Wise_Summary_${stamp}.xlsx`);
+
+      const stamp = new Date().toISOString().slice(0, 10);
+
+      if (exportType === "pdf") {
+        const headers = Object.keys(data[0]);
+        const body = data.map((row) =>
+          headers.map((h) => (typeof row[h] === "number" ? inr0(row[h]) : row[h] || "—"))
+        );
+        const doc = new jsPDF({ orientation: "landscape" });
+        doc.setFontSize(12);
+        doc.text("Customer Wise Summary", 14, 10);
+        autoTable(doc, {
+          head: [headers],
+          body,
+          startY: 14,
+          styles: { fontSize: 6, cellPadding: 1.5, overflow: "linebreak" },
+          headStyles: { fillColor: [251, 191, 36], textColor: [120, 53, 15] }, // amber
+          columnStyles: { 0: { cellWidth: 10 }, 3: { cellWidth: 45 }, 7: { cellWidth: 60 } }, // rank, address, remark
+        });
+        doc.save(`Customer_Wise_Summary_${stamp}.pdf`);
+      } else {
+        const ws = XLSX.utils.json_to_sheet(data);
+        ws["!cols"] = [
+          { wch: 7 }, { wch: 32 }, { wch: 18 }, { wch: 40 }, { wch: 18 }, { wch: 18 },
+          { wch: 16 }, { wch: 70 }, { wch: 16 }, { wch: 18 },
+        ];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Customer Wise");
+        XLSX.writeFile(wb, `Customer_Wise_Summary_${stamp}.xlsx`);
+      }
+    } catch (err) {
+      console.error("Export failed:", err);
+      alert("Export failed: " + (err?.message || "unknown error"));
     }
   };
 
