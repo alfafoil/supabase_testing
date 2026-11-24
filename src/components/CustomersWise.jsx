@@ -112,8 +112,8 @@ const SCOPE_COL = { current: 0, previous: 1, third: 2 };
      5-8 Month    : month -5 .. month -8
      9-12 Month   : month -9 .. month -12
      Last 1 Year  : month -1 .. month -12
-   (the underlying "baseline" used for the latest-3-months color coding is
-   a separate, unaffected average — see statsByName below) */
+   (Last 1 Year is also the baseline for the Green/Yellow/Blue/Red color
+   coding of the month cells — see statsByName below) */
 const SPECIAL_COL_OPTIONS = ["lastYear", "last4", "m5to8", "m9to12"];
 const SPECIAL_COL_LABELS = {
   lastYear: "Last 1 Year",
@@ -384,7 +384,7 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
   }, [gridRows]);
 
   /* summary stats (GRAND TOTAL / Last 1 Year / Last 4 Month / 5-8 / 9-12 /
-     YY TOTAL + baseline), always relative to today, from statsRows —
+     YY TOTAL + baseline, where baseline = Last 1 Year), always relative to today, from statsRows —
      deliberately independent of the FY filter (and of which months happen
      to be on screen) */
   const statsByName = useMemo(() => {
@@ -407,7 +407,6 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
     const map = new Map();
     for (const [name, monthMap] of monthSums.entries()) {
       let last4 = 0, m5to8 = 0, m9to12 = 0, lastYear = 0, allTimeTotal = 0, yyTotal = 0;
-      let baselineSum = 0, baselineCnt = 0; // separate, unaffected average — see below
 
       for (const [my, sum] of monthMap.entries()) {
         allTimeTotal += sum;
@@ -428,18 +427,13 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
         // 12-month sales total, always relative to today
         if (diff >= 1 && diff <= 12) yyTotal += sum;
 
-        // baseline for the latest-3-months color coding stays an AVERAGE
-        // over the trailing 12 months — untouched by the max-column change
-        if (diff >= 1 && diff <= 12) {
-          baselineSum += sum;
-          baselineCnt += 1;
-        }
       }
 
-      const avg = baselineCnt ? baselineSum / baselineCnt : 0;
+      // baseline for the Green / Yellow / Blue / Red color coding is the
+      // "Last 1 Year" column value itself (max single month, month -1 .. -12)
       map.set(name, {
         last4, m5to8, m9to12, lastYear, allTimeTotal, yyTotal,
-        baseline: avg === 0 ? 1 : avg,
+        baseline: lastYear === 0 ? 1 : lastYear,
       });
     }
     return map;
@@ -855,7 +849,7 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
 
       {/* color legend for the latest-3-months formatting */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-        <span className="font-medium text-slate-400">Latest 3 months vs monthly average:</span>
+        <span className="font-medium text-slate-400">Month value vs Last 1 Year column:</span>
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm bg-emerald-200" /> &gt; 80%
         </span>
