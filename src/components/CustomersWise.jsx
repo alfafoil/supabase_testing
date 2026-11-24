@@ -672,9 +672,9 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
 
   /* export the currently filtered set (every page, not just the page on
      screen) with these columns:
-       Rank, Customer Name, Salesman Name, Customer Address, Current Followup Date,
-       Next Followup Date, Followup By, Followup Remark, Latest Sale Date,
-       Latest Order Value
+       Rank, Customer Name, Salesman Name, Followup Remark, Current Followup Date,
+       Next Followup Date, Followup By, Latest Sale Date, Latest Order Value,
+       Customer Address
      Rows keep exactly the order and Rank shown in the table (the "Rank On"
      setting decides it) and only the filtered customers are exported.
      Followup Remark holds every remark of the customer, newest on top.
@@ -719,13 +719,13 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
           Rank: c.rank,
           "Customer Name": c.name,
           "Salesman Name": salesmanNameOf(c),
-          "Customer Address": d.address || "—",
+          "Followup Remark": d.followupRemark || "—",
           "Current Followup Date": fmtDate(d.currentFollowupDate),
           "Next Followup Date": fmtDate(d.nextFollowupDate),
           "Followup By": d.followupBy || "—",
-          "Followup Remark": d.followupRemark || "—",
           "Latest Sale Date": sale ? fmtDate(sale.date) : "—",
           "Latest Order Value": sale ? sale.value : "—",
+          "Customer Address": d.address || "—",
         };
       });
 
@@ -745,14 +745,14 @@ export default function CustomersWise({ rows = [], loading = false, onRefresh })
           startY: 14,
           styles: { fontSize: 6, cellPadding: 1.5, overflow: "linebreak" },
           headStyles: { fillColor: [251, 191, 36], textColor: [120, 53, 15] }, // amber
-          columnStyles: { 0: { cellWidth: 10 }, 3: { cellWidth: 45 }, 7: { cellWidth: 60 } }, // rank, address, remark
+          columnStyles: { 0: { cellWidth: 10 }, 3: { cellWidth: 60 }, 9: { cellWidth: 45 } }, // rank, remark, address
         });
         doc.save(`Customer_Wise_Summary_${stamp}.pdf`);
       } else {
         const ws = XLSX.utils.json_to_sheet(data);
         ws["!cols"] = [
-          { wch: 7 }, { wch: 32 }, { wch: 18 }, { wch: 40 }, { wch: 18 }, { wch: 18 },
-          { wch: 16 }, { wch: 70 }, { wch: 16 }, { wch: 18 },
+          { wch: 7 }, { wch: 32 }, { wch: 18 }, { wch: 70 }, { wch: 18 }, { wch: 18 },
+          { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 40 },
         ];
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Customer Wise");

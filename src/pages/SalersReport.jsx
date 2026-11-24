@@ -371,7 +371,7 @@ export default function SalersReport() {
       cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]
     );
 
-  /* combined filtering: KPI range + dropdowns, then Vch No descending */
+  /* combined filtering: KPI range + dropdowns, then Date descending (Vch No as tie-breaker) */
   const filtered = useMemo(() => {
     const def = KPI_DEFS.find((k) => k.key === kpiFilter) || null; // null = no KPI filter
     const list = rows.filter((r) => {
@@ -383,12 +383,15 @@ export default function SalersReport() {
         return false;
       return true;
     });
-    // Vch No — descending (numeric-aware)
-    return list.sort((a, b) =>
-      String(b.vch_no ?? "").localeCompare(String(a.vch_no ?? ""), undefined, {
+    // Date — descending (latest first); same date -> Vch No descending
+    return list.sort((a, b) => {
+      const ta = a._d ? a._d.getTime() : 0; // rows with missing/invalid date go last
+      const tb = b._d ? b._d.getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      return String(b.vch_no ?? "").localeCompare(String(a.vch_no ?? ""), undefined, {
         numeric: true,
-      })
-    );
+      });
+    });
   }, [rows, kpiFilter, salesman, fy, month, customers, now]);
 
   /* reset pagination whenever the result set changes */
